@@ -1,3 +1,5 @@
+import PlinthCompilerWorker from './compiler.worker.ts?worker';
+
 export type OutputKind = 'stdout' | 'stderr';
 export type OutputListener = (kind: OutputKind, message: string) => void;
 export type ProgressListener = (progress: number, detail: string) => void;
@@ -35,8 +37,7 @@ let compilerPromise: Promise<BrowserCompiler> | null = null;
 
 export function loadBrowserCompiler(onProgress: ProgressListener) {
   compilerPromise ??= new Promise<BrowserCompiler>((resolve, reject) => {
-    const worker = new Worker(new URL('./compiler.worker.ts', import.meta.url), {
-      type: 'module',
+    const worker = new PlinthCompilerWorker({
       name: 'plinth-browser-compiler',
     });
     const pending = new Map<number, PendingCompile>();
