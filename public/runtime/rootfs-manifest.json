@@ -4,19 +4,27 @@
   "parts": [
     {
       "file": "rootfs.part-000",
-      "size": 33554432
+      "size": 20971520
     },
     {
       "file": "rootfs.part-001",
-      "size": 33554432
+      "size": 20971520
     },
     {
       "file": "rootfs.part-002",
-      "size": 33554432
+      "size": 20971520
     },
     {
       "file": "rootfs.part-003",
-      "size": 14743420
+      "size": 20971520
+    },
+    {
+      "file": "rootfs.part-004",
+      "size": 20971520
+    },
+    {
+      "file": "rootfs.part-005",
+      "size": 10549116
     }
   ]
 }
