@@ -208,6 +208,13 @@ function addRootfsFile(path: string, data: Uint8Array) {
   const file = new File(new Uint8Array(), { readonly: true });
   file.data = data;
   directory.contents.set(filename, file);
+  if (filename === 'libuplc-ghc-empty.so') {
+    for (const alias of ['libuplc-ghc-empty-mman.so', 'libuplc-ghc-empty-dl.so']) {
+      const aliasFile = new File(new Uint8Array(), { readonly: true });
+      aliasFile.data = data;
+      directory.contents.set(alias, aliasFile);
+    }
+  }
   return filename.endsWith('.so')
     ? `/${parts.join('/')}`.replace(/\/$/, '') || '/'
     : null;
@@ -427,8 +434,8 @@ async function initialize() {
   class PlinthBrowserHost extends linker.DyLDBrowserHost {
     override findSystemLibrary(filename: string) {
       const mapped = {
-        'liblibwasi-emulated-mman.so': 'libuplc-ghc-empty.so',
-        'liblibdl.so': 'libuplc-ghc-empty.so',
+        'liblibwasi-emulated-mman.so': 'libuplc-ghc-empty-mman.so',
+        'liblibdl.so': 'libuplc-ghc-empty-dl.so',
       }[filename] ?? filename;
       return super.findSystemLibrary(mapped);
     }
