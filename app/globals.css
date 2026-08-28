@@ -475,14 +475,25 @@ kbd {
 }
 
 .output-actions {
+  flex: 0 0 auto;
   gap: 5px;
 }
 
 .output-actions button {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 8px;
   gap: 5px;
   height: 27px;
+  justify-content: center;
+  line-height: 1;
   padding: 0 8px;
-  font-size: 8px;
+  white-space: nowrap;
+}
+
+.output-actions button svg {
+  flex: 0 0 auto;
 }
 
 .output-actions button:disabled {
