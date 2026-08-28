@@ -40,6 +40,26 @@ main :: IO ()
 main = pure ()`,
   },
   {
+    id: 'utils',
+    label: 'Imported Utils helper',
+    source: `{-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE TemplateHaskell #-}
+module Main where
+
+import PlutusTx
+import PlutusTx.Prelude qualified as Plinth
+import Utils qualified
+
+addOne :: Integer -> Integer
+addOne x = Utils.plusInteger x 1
+
+compiledAddOne :: CompiledCode (Integer -> Integer)
+compiledAddOne = $$(PlutusTx.compile [|| addOne ||])
+
+main :: IO ()
+main = pure ()`,
+  },
+  {
     id: 'equality',
     label: 'Integer equality',
     source: `{-# LANGUAGE ImportQualifiedPost #-}
@@ -152,10 +172,13 @@ export default function Home() {
       setRuntimeDetail(`${compiled.programs.length} program${compiled.programs.length === 1 ? '' : 's'} compiled in ${(compiled.elapsedMs / 1000).toFixed(1)}s`);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Compilation failed';
-      const customModuleHint = /Could not find module [‘']Utils/.test(lines.join('\n'))
-        ? '\nHint: Utils is a project-local module. Inline that helper in this single-file workspace.'
-        : '';
-      setDiagnostics([...lines, `${message}${customModuleHint}`]);
+      const compilerOutput = lines.join('\n');
+      const compiledCodeShowHint =
+        compilerOutput.includes('No instance for') &&
+        compilerOutput.includes('Show (CompiledCode')
+          ? '\nHint: CompiledCode has no Show instance. This workspace already displays its UPLC, so use `main = pure ()`.'
+          : '';
+      setDiagnostics([...lines, `${message}${compiledCodeShowHint}`]);
       setActiveTab('diagnostics');
       setRuntimeDetail('Compilation failed');
     } finally {

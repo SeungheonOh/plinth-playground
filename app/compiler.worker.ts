@@ -22,7 +22,7 @@ const RUNTIME = '/runtime';
 
 const PLINTH_FLAGS = [
   '-package=plutus-tx',
-  '-i/tmp/modules',
+  '-package=plinth-browser-utils',
   '-fplugin-opt=Plinth.Plugin:dump-uplc',
   '-Wno-missed-extra-shared-lib',
   '-v1',
@@ -42,6 +42,8 @@ type CompileFunction = (args: string, source: string) => Promise<string>;
 type WasiInstance = Parameters<WASI['start']>[0];
 
 type RuntimeManifest = {
+  format: string;
+  version?: string;
   totalSize: number;
   parts: Array<{ file: string; size: number }>;
 };
@@ -85,7 +87,9 @@ function postOutput(kind: OutputKind, message: string) {
 }
 
 async function fetchRuntimeArchive() {
-  const manifestResponse = await fetch(`${RUNTIME}/rootfs-manifest.json`);
+  const manifestResponse = await fetch(`${RUNTIME}/rootfs-manifest.json`, {
+    cache: 'no-cache',
+  });
   if (!manifestResponse.ok) {
     throw new Error(`Runtime manifest failed (${manifestResponse.status})`);
   }
@@ -93,7 +97,10 @@ async function fetchRuntimeArchive() {
   let received = 0;
 
   const downloadPart = async ({ file, size }: RuntimeManifest['parts'][number]) => {
-    const response = await fetch(`${RUNTIME}/${file}`);
+    const version = manifest.version
+      ? `?v=${encodeURIComponent(manifest.version)}`
+      : '';
+    const response = await fetch(`${RUNTIME}/${file}${version}`);
     if (!response.ok) throw new Error(`Runtime download failed (${response.status})`);
     if (!response.body) {
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -101,8 +108,8 @@ async function fetchRuntimeArchive() {
       return bytes;
     }
 
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
     let partReceived = 0;
 
     while (true) {
@@ -126,15 +133,122 @@ async function fetchRuntimeArchive() {
     return bytes;
   };
 
-  const parts = [];
-  for (const part of manifest.parts) parts.push(await downloadPart(part));
+  const parts = await Promise.all(manifest.parts.map(downloadPart));
   const archive = new Uint8Array(manifest.totalSize);
   let offset = 0;
   for (const part of parts) {
     archive.set(part, offset);
     offset += part.byteLength;
   }
-  return archive;
+  return { archive, format: manifest.format };
+}
+
+const tarTextDecoder = new TextDecoder();
+
+function decodeTarString(bytes: Uint8Array) {
+  const nul = bytes.indexOf(0);
+  return tarTextDecoder.decode(nul === -1 ? bytes : bytes.subarray(0, nul));
+}
+
+function parseTarSize(bytes: Uint8Array) {
+  const value = decodeTarString(bytes).trim();
+  return value === '' ? 0 : Number.parseInt(value, 8);
+}
+
+function parsePaxPath(bytes: Uint8Array) {
+  let offset = 0;
+  let path: string | undefined;
+  while (offset < bytes.byteLength) {
+    const space = bytes.indexOf(32, offset);
+    if (space === -1) break;
+    const length = Number.parseInt(tarTextDecoder.decode(bytes.subarray(offset, space)), 10);
+    if (!Number.isSafeInteger(length) || length < 1 || offset + length > bytes.byteLength) break;
+    const record = tarTextDecoder.decode(bytes.subarray(space + 1, offset + length - 1));
+    const separator = record.indexOf('=');
+    if (separator !== -1 && record.slice(0, separator) === 'path') {
+      path = record.slice(separator + 1);
+    }
+    offset += length;
+  }
+  return path;
+}
+
+function addRootfsFile(path: string, data: Uint8Array) {
+  const parts = path
+    .replace(/^\.\//, '')
+    .split('/')
+    .filter((part) => part !== '' && part !== '.');
+  if (parts.length === 0 || parts.some((part) => part === '..')) {
+    throw new Error(`Unsafe runtime archive path: ${path}`);
+  }
+
+  const filename = parts.pop()!;
+  let directory = rootfs.dir;
+  for (const part of parts) {
+    const existing = directory.contents.get(part);
+    if (existing instanceof Directory) {
+      directory = existing;
+    } else if (existing) {
+      throw new Error(`Runtime archive path is not a directory: ${path}`);
+    } else {
+      const child = new Directory(new Map());
+      directory.contents.set(part, child);
+      directory = child;
+    }
+  }
+
+  const file = new File(new Uint8Array(), { readonly: true });
+  file.data = data;
+  directory.contents.set(filename, file);
+  return filename.endsWith('.so')
+    ? `/${parts.join('/')}`.replace(/\/$/, '') || '/'
+    : null;
+}
+
+async function extractGzipTar(archive: Uint8Array) {
+  const stream = new Blob([archive])
+    .stream()
+    .pipeThrough(new DecompressionStream('gzip'));
+  const tarBytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  postProgress(88, 'Indexing the GHC and Plinth filesystem');
+
+  const sharedLibraryDirectories = new Set<string>();
+  let pendingPath: string | undefined;
+  for (let offset = 0; offset + 512 <= tarBytes.byteLength;) {
+    const header = tarBytes.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+
+    const size = parseTarSize(header.subarray(124, 136));
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error('Invalid file size in runtime archive');
+    }
+    const dataOffset = offset + 512;
+    const dataEnd = dataOffset + size;
+    if (dataEnd > tarBytes.byteLength) throw new Error('Truncated runtime archive');
+
+    const type = String.fromCharCode(header[156]);
+    const name = decodeTarString(header.subarray(0, 100));
+    const prefix = decodeTarString(header.subarray(345, 500));
+    const headerPath = prefix ? `${prefix}/${name}` : name;
+    const data = tarBytes.subarray(dataOffset, dataEnd);
+
+    if (type === 'x') {
+      pendingPath = parsePaxPath(data) ?? pendingPath;
+    } else if (type === 'L') {
+      pendingPath = decodeTarString(data);
+    } else if (type === '0' || type === '\0') {
+      const directory = addRootfsFile(pendingPath ?? headerPath, data);
+      if (directory) sharedLibraryDirectories.add(directory);
+      pendingPath = undefined;
+    } else if (type === '5') {
+      pendingPath = undefined;
+    } else if (type !== 'g') {
+      throw new Error(`Unsupported runtime archive entry type: ${type}`);
+    }
+
+    offset = dataOffset + Math.ceil(size / 512) * 512;
+  }
+  return [...sharedLibraryDirectories];
 }
 
 function collectSharedLibraryDirectories(directory: Directory) {
@@ -179,33 +293,41 @@ async function decodeProgram(filename: string) {
 
 async function initialize() {
   rootfs = new PreopenDirectory('/', new Map());
-  const tarWasi = new WASI(
-    ['bsdtar.wasm', '-x'],
-    [],
-    [
-      new OpenFile(new File(new Uint8Array(), { readonly: true })),
-      ConsoleStdout.lineBuffered(() => undefined),
-      ConsoleStdout.lineBuffered((message) => console.warn(message)),
-      rootfs,
-    ],
-    { debug: false },
-  );
-
   postProgress(1, 'Starting isolated compiler worker');
-  const [{ instance: tarInstance }, rootfsBytes, linker, compiledDecoder] =
-    await Promise.all([
-      WebAssembly.instantiateStreaming(fetch(`${RUNTIME}/bsdtar.wasm`), {
-        wasi_snapshot_preview1: tarWasi.wasiImport,
-      }),
-      fetchRuntimeArchive(),
-      import(/* @vite-ignore */ `${RUNTIME}/dyld.mjs`) as Promise<DynamicLinkerModule>,
-      WebAssembly.compileStreaming(fetch(`${RUNTIME}/decode-uplc.wasm`)),
-    ]);
+  const [runtimeArchive, linker, compiledDecoder] = await Promise.all([
+    fetchRuntimeArchive(),
+    import(/* @vite-ignore */ `${RUNTIME}/dyld.mjs`) as Promise<DynamicLinkerModule>,
+    WebAssembly.compileStreaming(fetch(`${RUNTIME}/decode-uplc.wasm`)),
+  ]);
   decoderModule = compiledDecoder;
 
-  postProgress(82, 'Unpacking GHC and Plinth in memory');
-  tarWasi.fds[0] = new OpenFile(new File(rootfsBytes, { readonly: true }));
-  tarWasi.start(tarInstance as unknown as WasiInstance);
+  let searchDirs: string[];
+  if (
+    runtimeArchive.format.endsWith('.tar.gz') &&
+    typeof DecompressionStream !== 'undefined'
+  ) {
+    postProgress(82, 'Decompressing GHC and Plinth in memory');
+    searchDirs = await extractGzipTar(runtimeArchive.archive);
+  } else {
+    const tarWasi = new WASI(
+      ['bsdtar.wasm', '-x', '-m'],
+      [],
+      [
+        new OpenFile(new File(runtimeArchive.archive, { readonly: true })),
+        ConsoleStdout.lineBuffered(() => undefined),
+        ConsoleStdout.lineBuffered((message) => console.warn(message)),
+        rootfs,
+      ],
+      { debug: false },
+    );
+    const { instance: tarInstance } = await WebAssembly.instantiateStreaming(
+      fetch(`${RUNTIME}/bsdtar.wasm`),
+      { wasi_snapshot_preview1: tarWasi.wasiImport },
+    );
+    postProgress(82, 'Unpacking GHC and Plinth in memory');
+    tarWasi.start(tarInstance as unknown as WasiInstance);
+    searchDirs = collectSharedLibraryDirectories(rootfs.dir);
+  }
 
   postProgress(91, 'Linking the Plinth compiler');
   class PlinthBrowserHost extends linker.DyLDBrowserHost {
@@ -224,7 +346,7 @@ async function initialize() {
       stdout: (message) => postOutput('stdout', message),
       stderr: (message) => postOutput('stderr', message),
     }),
-    searchDirs: collectSharedLibraryDirectories(rootfs.dir),
+    searchDirs,
     mainSoPath: '/tmp/libuplc-ghc-browser.so',
     args: ['libuplc-ghc-browser.so', '+RTS', '-K512m', '-RTS'],
     isIserv: false,

@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-The first browser load downloads roughly 110 MB of compiler files from
+The first browser load downloads roughly 140 MB of compiler files from
 `public/runtime`. Those files are split into chunks small enough for normal Git
 and Cloudflare asset uploads.
 
