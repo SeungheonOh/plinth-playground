@@ -22,6 +22,7 @@ const RUNTIME = '/runtime';
 
 const PLINTH_FLAGS = [
   '-package=plutus-tx',
+  '-i/tmp/modules',
   '-fplugin-opt=Plinth.Plugin:dump-uplc',
   '-Wno-missed-extra-shared-lib',
   '-v1',

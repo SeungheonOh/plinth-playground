@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Plinth Lab — Compile Plinth in your browser',
-  description: 'Write Plinth Haskell and compile it locally to Untyped Plutus Core and Flat bytes with the real Plinth plugin.',
+  title: 'Plinth Playground — Compile Plinth in your browser',
+  description: 'Write Plinth Haskell and compile it locally to Untyped Plutus Core and Flat bytes with the real Plinth compiler.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

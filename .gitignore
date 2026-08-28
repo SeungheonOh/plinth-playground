@@ -41,5 +41,5 @@ next-env.d.ts
 /compiler-experiment/
 tsconfig.tsbuildinfo
 
-# generated compiler image; included in packaged deployments, not source pushes
-/public/runtime/rootfs.part-*
+# The split browser compiler image under /public/runtime is tracked so
+# Cloudflare Git and direct-upload deployments are self-contained.
