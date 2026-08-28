@@ -8,7 +8,13 @@ import {
   PreopenDirectory,
   WASI,
 } from '@bjorn3/browser_wasi_shim';
-import type { CompileResult, CompiledProgram, OutputKind } from './compiler-runtime';
+import type {
+  CekArgument,
+  CekEvaluationResult,
+  CompileResult,
+  CompiledProgram,
+  OutputKind,
+} from './compiler-runtime';
 
 const GHC_VERSION = '9.12.4.20260731';
 const GHC_PREFIX = '/home/sho/fun/ghc-wasm-toolchain-9.12';
@@ -19,6 +25,7 @@ const PROJECT_PACKAGE_DB =
   '/home/sho/fun/ghc-plinth-wasm-playground/compiler-experiment/' +
   `dist-uplc-ghc-wasm-9.12/packagedb/ghc-${GHC_VERSION}`;
 const RUNTIME = '/runtime';
+const CEK_RUNTIME_VERSION = 'plinth-1.66-bounded-v1';
 
 const PLINTH_FLAGS = [
   '-package=plutus-tx',
@@ -75,6 +82,7 @@ type DynamicLinkerModule = {
 let activeRequestId: number | null = null;
 let compileFunction: CompileFunction;
 let decoderModule: WebAssembly.Module;
+let evaluatorModulePromise: Promise<WebAssembly.Module> | null = null;
 let rootfs: PreopenDirectory;
 
 function postProgress(progress: number, detail: string) {
@@ -206,7 +214,11 @@ function addRootfsFile(path: string, data: Uint8Array) {
 }
 
 async function extractGzipTar(archive: Uint8Array) {
-  const stream = new Blob([archive])
+  const archiveBuffer = archive.buffer.slice(
+    archive.byteOffset,
+    archive.byteOffset + archive.byteLength,
+  ) as ArrayBuffer;
+  const stream = new Blob([archiveBuffer])
     .stream()
     .pipeThrough(new DecompressionStream('gzip'));
   const tarBytes = new Uint8Array(await new Response(stream).arrayBuffer());
@@ -291,6 +303,88 @@ async function decodeProgram(filename: string) {
   return stdout.join('\n').trim();
 }
 
+function encodeUtf8Hex(value: string) {
+  return [...new TextEncoder().encode(value)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function decodeUtf8Hex(value: string) {
+  if (value.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(value)) {
+    throw new Error('The CEK evaluator returned malformed text');
+  }
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < value.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(value.slice(index, index + 2), 16);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function encodeArgument(argument: CekArgument) {
+  switch (argument.kind) {
+    case 'unit':
+      return 'unit';
+    case 'integer':
+      return `integer:${argument.value.trim()}`;
+    case 'bool':
+      return `bool:${argument.value.trim().toLowerCase()}`;
+    case 'bytes':
+      return `bytes:${argument.value.trim().replace(/^0x/i, '').replace(/\s/g, '')}`;
+    case 'string':
+      return `string:${encodeUtf8Hex(argument.value)}`;
+    case 'data':
+      return `data:${encodeUtf8Hex(argument.value)}`;
+  }
+}
+
+async function evaluateProgram(filename: string, args: CekArgument[]) {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  evaluatorModulePromise ??= WebAssembly.compileStreaming(
+    fetch(`${RUNTIME}/evaluate-uplc.wasm?v=${CEK_RUNTIME_VERSION}`),
+  );
+  const evaluatorModule = await evaluatorModulePromise;
+  const evaluatorWasi = new WASI(
+    ['evaluate-uplc.wasm', filename, ...args.map(encodeArgument)],
+    [],
+    [
+      new OpenFile(new File(new Uint8Array(), { readonly: true })),
+      ConsoleStdout.lineBuffered((message) => stdout.push(message)),
+      ConsoleStdout.lineBuffered((message) => stderr.push(message)),
+      rootfs,
+    ],
+    { debug: false },
+  );
+  const instance = await WebAssembly.instantiate(evaluatorModule, {
+    wasi_snapshot_preview1: evaluatorWasi.wasiImport,
+  });
+  evaluatorWasi.start(instance as unknown as WasiInstance);
+  if (stderr.length > 0) throw new Error(stderr.join('\n'));
+
+  let value: string | undefined;
+  let evaluationError: string | undefined;
+  let cpu = '0';
+  let memory = '0';
+  const logs: string[] = [];
+  for (const record of stdout) {
+    const [label, ...fields] = record.split('\t');
+    if (label === 'RESULT') value = decodeUtf8Hex(fields[0] ?? '');
+    if (label === 'ERROR') evaluationError = decodeUtf8Hex(fields[0] ?? '');
+    if (label === 'BUDGET') [cpu = '0', memory = '0'] = fields;
+    if (label === 'LOG') logs.push(decodeUtf8Hex(fields[0] ?? ''));
+  }
+  if (evaluationError === undefined && value === undefined) {
+    throw new Error('The CEK evaluator did not return a result');
+  }
+  return {
+    succeeded: evaluationError === undefined,
+    value: value ?? '',
+    error: evaluationError,
+    budget: { cpu, memory },
+    logs,
+  };
+}
+
 async function initialize() {
   rootfs = new PreopenDirectory('/', new Map());
   postProgress(1, 'Starting isolated compiler worker');
@@ -360,15 +454,26 @@ async function initialize() {
   self.postMessage({ type: 'ready' });
 }
 
-self.onmessage = async (
-  event: MessageEvent<{ type: 'compile'; requestId: number; source: string }>,
-) => {
-  if (event.data.type !== 'compile') return;
-  const { requestId, source } = event.data;
+self.onmessage = async (event: MessageEvent<
+  | { type: 'compile'; requestId: number; source: string }
+  | { type: 'evaluate'; requestId: number; filename: string; args: CekArgument[] }
+>) => {
+  const { requestId } = event.data;
   activeRequestId = requestId;
   const startedAt = performance.now();
 
   try {
+    if (event.data.type === 'evaluate') {
+      const evaluated = await evaluateProgram(event.data.filename, event.data.args);
+      const result: CekEvaluationResult = {
+        ...evaluated,
+        elapsedMs: performance.now() - startedAt,
+      };
+      self.postMessage({ type: 'evaluate-result', requestId, result });
+      return;
+    }
+
+    const { source } = event.data;
     const encodedOutputs = await compileFunction(PLINTH_FLAGS, source);
     const programs: CompiledProgram[] = [];
     for (const record of encodedOutputs.trim().split('\n')) {
@@ -387,7 +492,7 @@ self.onmessage = async (
       elapsedMs: performance.now() - startedAt,
       programs,
     };
-    self.postMessage({ type: 'result', requestId, result });
+    self.postMessage({ type: 'compile-result', requestId, result });
   } catch (error) {
     self.postMessage({
       type: 'error',

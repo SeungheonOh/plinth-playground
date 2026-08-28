@@ -1,6 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import CodeMirror from '@uiw/react-codemirror';
+import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
+import { haskell } from '@codemirror/legacy-modes/mode/haskell';
+import { tags } from '@lezer/highlight';
 import {
   Check,
   ChevronDown,
@@ -10,10 +13,26 @@ import {
   FileCode2,
   Hammer,
   LoaderCircle,
+  Play,
+  Plus,
   Terminal,
+  Trash2,
 } from 'lucide-react';
 import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
   type BrowserCompiler,
+  type CekArgument,
+  type CekArgumentKind,
+  type CekEvaluationResult,
   type CompileResult,
   loadBrowserCompiler,
 } from './compiler-runtime';
@@ -22,6 +41,7 @@ const examples = [
   {
     id: 'successor',
     label: 'Integer successor',
+    args: [{ kind: 'integer', value: '41' }],
     source: `{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Main where
@@ -42,6 +62,7 @@ main = pure ()`,
   {
     id: 'utils',
     label: 'Imported Utils helper',
+    args: [{ kind: 'integer', value: '8' }],
     source: `{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Main where
@@ -62,6 +83,10 @@ main = pure ()`,
   {
     id: 'equality',
     label: 'Integer equality',
+    args: [
+      { kind: 'integer', value: '42' },
+      { kind: 'integer', value: '42' },
+    ],
     source: `{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Main where
@@ -82,6 +107,10 @@ main = pure ()`,
   {
     id: 'validator',
     label: 'Simple validator',
+    args: [
+      { kind: 'integer', value: '7' },
+      { kind: 'integer', value: '7' },
+    ],
     source: `{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Main where
@@ -100,22 +129,75 @@ validator = $$(PlutusTx.compile [|| validate ||])
 main :: IO ()
 main = pure ()`,
   },
-] as const;
+] satisfies Array<{
+  id: string;
+  label: string;
+  args: CekArgument[];
+  source: string;
+}>;
 
-type RuntimeState = 'loading' | 'ready' | 'compiling' | 'error';
-type OutputTab = 'uplc' | 'flat' | 'diagnostics';
+const argumentKinds: Array<{ kind: CekArgumentKind; label: string }> = [
+  { kind: 'integer', label: 'Integer' },
+  { kind: 'bytes', label: 'ByteString' },
+  { kind: 'string', label: 'String' },
+  { kind: 'bool', label: 'Bool' },
+  { kind: 'unit', label: 'Unit' },
+  { kind: 'data', label: 'Data' },
+];
+
+const argumentDefaults: Record<CekArgumentKind, string> = {
+  integer: '0',
+  bytes: '',
+  string: '',
+  bool: 'true',
+  unit: '',
+  data: 'I 0',
+};
+
+const argumentPlaceholders: Record<CekArgumentKind, string> = {
+  integer: '42',
+  bytes: 'deadbeef',
+  string: 'hello',
+  bool: 'true',
+  unit: '()',
+  data: 'Constr 0 [I 42]',
+};
+
+const haskellLanguage = StreamLanguage.define(haskell);
+const haskellHighlighting = HighlightStyle.define([
+  { tag: tags.keyword, color: '#7157a5', fontWeight: '600' },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: '#2f6690' },
+  { tag: [tags.definition(tags.variableName), tags.function(tags.variableName)], color: '#146b58' },
+  { tag: [tags.string, tags.character], color: '#9a4b35' },
+  { tag: [tags.number, tags.bool], color: '#a15c12' },
+  { tag: [tags.lineComment, tags.blockComment], color: '#89928d', fontStyle: 'italic' },
+  { tag: [tags.operator, tags.punctuation], color: '#59635e' },
+  { tag: tags.meta, color: '#7d526d' },
+]);
+
+type RuntimeState = 'loading' | 'ready' | 'compiling' | 'evaluating' | 'error';
+type OutputTab = 'uplc' | 'run' | 'flat' | 'diagnostics';
 
 const waitingMessage = `Compile Main.hs to inspect the Untyped Plutus Core emitted by Plinth.Plugin.
 
-The compiler runs entirely in your browser. The first load downloads the GHC + Plinth runtime; later visits use the browser cache.`;
+GHC, Plinth, and the CEK evaluator all run locally in this browser. The first visit downloads the compiler runtime; later visits use the browser cache.`;
 
 function formatFlat(hex: string) {
   return hex.match(/.{1,32}/g)?.join('\n') ?? hex;
 }
 
+function cloneArguments(args: CekArgument[]) {
+  return args.map((argument) => ({ ...argument }));
+}
+
+function formatNumber(value: string) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number.toLocaleString() : value;
+}
+
 export default function Home() {
-  const [source, setSource] = useState<string>(examples[0].source);
-  const [selectedExample, setSelectedExample] = useState<string>(examples[0].id);
+  const [source, setSource] = useState(examples[0].source);
+  const [selectedExample, setSelectedExample] = useState(examples[0].id);
   const [compiler, setCompiler] = useState<BrowserCompiler | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState>('loading');
   const [runtimeDetail, setRuntimeDetail] = useState('Loading browser compiler');
@@ -124,10 +206,21 @@ export default function Home() {
   const [result, setResult] = useState<CompileResult | null>(null);
   const [activeTab, setActiveTab] = useState<OutputTab>('uplc');
   const [activeProgram, setActiveProgram] = useState(0);
+  const [arguments_, setArguments] = useState<CekArgument[]>(cloneArguments(examples[0].args));
+  const [evaluation, setEvaluation] = useState<CekEvaluationResult | null>(null);
+  const [evaluationError, setEvaluationError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [splitPosition, setSplitPosition] = useState(() => {
+    if (typeof window === 'undefined') return 54;
+    const saved = Number(window.localStorage.getItem('plinth-workspace-split'));
+    return saved >= 30 && saved <= 70 ? saved : 54;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const workspaceRef = useRef<HTMLElement>(null);
+
   const lineCount = useMemo(() => source.split('\n').length, [source]);
   const program = result?.programs[activeProgram] ?? null;
-  const isBusy = runtimeState === 'loading' || runtimeState === 'compiling';
+  const isBusy = runtimeState === 'loading' || runtimeState === 'compiling' || runtimeState === 'evaluating';
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +251,8 @@ export default function Home() {
     setRuntimeDetail('Running Plinth.Plugin');
     setDiagnostics([]);
     setResult(null);
+    setEvaluation(null);
+    setEvaluationError('');
     setActiveProgram(0);
     setCopied(false);
 
@@ -168,15 +263,14 @@ export default function Home() {
         setDiagnostics([...lines]);
       });
       setResult(compiled);
-      setActiveTab('uplc');
+      setActiveTab('run');
       setRuntimeDetail(`${compiled.programs.length} program${compiled.programs.length === 1 ? '' : 's'} compiled in ${(compiled.elapsedMs / 1000).toFixed(1)}s`);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Compilation failed';
       const compilerOutput = lines.join('\n');
       const compiledCodeShowHint =
-        compilerOutput.includes('No instance for') &&
-        compilerOutput.includes('Show (CompiledCode')
-          ? '\nHint: CompiledCode has no Show instance. This workspace already displays its UPLC, so use `main = pure ()`.'
+        compilerOutput.includes('No instance for') && compilerOutput.includes('Show (CompiledCode')
+          ? '\nHint: CompiledCode has no Show instance. The playground already captures its UPLC, so use `main = pure ()`.'
           : '';
       setDiagnostics([...lines, `${message}${compiledCodeShowHint}`]);
       setActiveTab('diagnostics');
@@ -186,35 +280,110 @@ export default function Home() {
     }
   }, [compiler, runtimeState, source]);
 
+  const runEvaluation = useCallback(async () => {
+    if (!compiler || !program || runtimeState !== 'ready') return;
+    setRuntimeState('evaluating');
+    setRuntimeDetail('Loading and running the CEK machine');
+    setEvaluation(null);
+    setEvaluationError('');
+    setActiveTab('run');
+    setCopied(false);
+    try {
+      const evaluated = await compiler.evaluate(program.filename, arguments_);
+      setEvaluation(evaluated);
+      setRuntimeDetail(
+        `${evaluated.succeeded ? 'Evaluation completed' : 'Evaluation failed'} in ${evaluated.elapsedMs < 1000 ? `${Math.round(evaluated.elapsedMs)}ms` : `${(evaluated.elapsedMs / 1000).toFixed(1)}s`}`,
+      );
+    } catch (error: unknown) {
+      setEvaluationError(error instanceof Error ? error.message : 'CEK evaluation failed');
+      setRuntimeDetail('CEK runner failed');
+    } finally {
+      setRuntimeState('ready');
+    }
+  }, [arguments_, compiler, program, runtimeState]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === 'Enter') {
+        event.preventDefault();
+        void runEvaluation();
+      } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
         event.preventDefault();
         void compile();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [compile]);
+  }, [compile, runEvaluation]);
 
   const selectExample = (id: string) => {
     const next = examples.find((example) => example.id === id) ?? examples[0];
     setSelectedExample(next.id);
     setSource(next.source);
+    setArguments(cloneArguments(next.args));
     setResult(null);
+    setEvaluation(null);
+    setEvaluationError('');
     setDiagnostics([]);
     setActiveTab('uplc');
     setActiveProgram(0);
   };
 
-  const output = activeTab === 'diagnostics'
+  const changeSource = (value: string) => {
+    setSource(value);
+    setSelectedExample('');
+    if (result) {
+      setResult(null);
+      setEvaluation(null);
+      setEvaluationError('');
+      setDiagnostics([]);
+      setActiveTab('uplc');
+    }
+  };
+
+  const updateArgument = (index: number, patch: Partial<CekArgument>) => {
+    setArguments((current) => current.map((argument, itemIndex) => (
+      itemIndex === index ? { ...argument, ...patch } : argument
+    )));
+    setEvaluation(null);
+    setEvaluationError('');
+  };
+
+  const changeArgumentKind = (index: number, kind: CekArgumentKind) => {
+    updateArgument(index, { kind, value: argumentDefaults[kind] });
+  };
+
+  const addArgument = () => {
+    setArguments((current) => [...current, { kind: 'integer', value: '0' }]);
+    setEvaluation(null);
+    setEvaluationError('');
+  };
+
+  const removeArgument = (index: number) => {
+    setArguments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setEvaluation(null);
+    setEvaluationError('');
+  };
+
+  const textOutput = activeTab === 'diagnostics'
     ? diagnostics.length > 0 ? diagnostics.join('\n') : 'No compiler diagnostics.'
     : activeTab === 'flat'
       ? program ? formatFlat(program.flatHex) : waitingMessage
       : program?.uplc ?? waitingMessage;
 
+  const copyableOutput = activeTab === 'run'
+    ? evaluation
+      ? [
+          evaluation.succeeded ? evaluation.value : evaluation.error,
+          `CPU: ${evaluation.budget.cpu}`,
+          `Memory: ${evaluation.budget.memory}`,
+          ...evaluation.logs.map((log) => `Trace: ${log}`),
+        ].filter(Boolean).join('\n')
+      : evaluationError || 'No CEK result yet.'
+    : textOutput;
+
   const copyOutput = async () => {
-    await navigator.clipboard.writeText(output);
+    await navigator.clipboard.writeText(copyableOutput);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
   };
@@ -232,20 +401,73 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(url), 500);
   };
 
+  const updateSplitFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isResizing || !workspaceRef.current) return;
+    const bounds = workspaceRef.current.getBoundingClientRect();
+    const isVertical = bounds.width <= 820;
+    const raw = isVertical
+      ? ((event.clientY - bounds.top) / bounds.height) * 100
+      : ((event.clientX - bounds.left) / bounds.width) * 100;
+    const next = Math.min(70, Math.max(30, Math.round(raw * 10) / 10));
+    setSplitPosition(next);
+    window.localStorage.setItem('plinth-workspace-split', String(next));
+  };
+
+  const finishResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setIsResizing(false);
+  };
+
+  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+      ? -2
+      : event.key === 'ArrowRight' || event.key === 'ArrowDown'
+        ? 2
+        : 0;
+    if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 30 : event.key === 'End' ? 70 : Math.min(70, Math.max(30, splitPosition + direction));
+    setSplitPosition(next);
+    window.localStorage.setItem('plinth-workspace-split', String(next));
+  };
+
+  const workspaceStyle = {
+    '--split-position': `${splitPosition}%`,
+  } as CSSProperties;
+
+  const stateLabel = runtimeState === 'loading'
+    ? `${progress}% loading`
+    : runtimeState === 'compiling'
+      ? 'compiling'
+      : runtimeState === 'evaluating'
+        ? 'evaluating'
+        : runtimeState === 'error'
+          ? 'runtime error'
+          : 'runtime ready';
+
   return (
-    <main className="playground-shell">
+    <main className={`playground-shell${isResizing ? ' is-resizing' : ''}`}>
       <header className="topbar">
         <div className="identity">
           <span className="identity-mark">λ</span>
-          <strong>Plinth Playground</strong>
-          <span className="identity-subtitle">Haskell → Untyped Plutus Core</span>
+          <span className="identity-copy">
+            <strong>Plinth Playground</strong>
+            <small>Compile and run Plutus in your browser</small>
+          </span>
         </div>
         <div className="topbar-actions">
           <div className="compiler-state" data-state={runtimeState}>
             {isBusy ? <LoaderCircle size={13} /> : <span />}
-            <span>{runtimeState === 'loading' ? `${progress}% loading` : runtimeState === 'compiling' ? 'compiling' : runtimeState === 'error' ? 'runtime error' : 'compiler ready'}</span>
+            <span>{stateLabel}</span>
           </div>
-          <a className="icon-button" href="https://github.com/input-output-hk/ghc-plinth/tree/ghc-9.6-plinth" target="_blank" rel="noreferrer" aria-label="Open ghc-plinth on GitHub"><ExternalLink size={15} /></a>
+          <a className="icon-button" href="https://github.com/input-output-hk/ghc-plinth/tree/ghc-9.6-plinth" target="_blank" rel="noreferrer" aria-label="Open ghc-plinth on GitHub">
+            <ExternalLink size={15} />
+          </a>
+          <button className="secondary-button" type="button" disabled={!program || runtimeState !== 'ready'} onClick={() => void runEvaluation()}>
+            {runtimeState === 'evaluating' ? <LoaderCircle size={14} /> : <Play size={14} />}
+            Run CEK
+          </button>
           <button className="primary-button" type="button" disabled={runtimeState !== 'ready'} onClick={() => void compile()}>
             {runtimeState === 'compiling' ? <LoaderCircle size={14} /> : <Hammer size={14} />}
             Compile
@@ -254,7 +476,7 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="workspace" aria-label="Plinth compiler workspace">
+      <section ref={workspaceRef} className="workspace" style={workspaceStyle} aria-label="Plinth compiler workspace">
         <section className="source-pane">
           <header className="pane-toolbar">
             <div className="source-tabs">
@@ -264,6 +486,7 @@ export default function Home() {
               <span>Example</span>
               <span className="select-wrap">
                 <select value={selectedExample} onChange={(event) => selectExample(event.target.value)}>
+                  {selectedExample === '' ? <option value="">Custom source</option> : null}
                   {examples.map((example) => <option key={example.id} value={example.id}>{example.label}</option>)}
                 </select>
                 <ChevronDown size={12} />
@@ -272,17 +495,16 @@ export default function Home() {
           </header>
 
           <div className="editor-area">
-            <div className="line-gutter" aria-hidden="true">
-              {Array.from({ length: lineCount }, (_, index) => <span key={index}>{index + 1}</span>)}
-            </div>
-            <textarea
+            <CodeMirror
               aria-label="Plinth Haskell source"
+              basicSetup
+              className="source-editor"
+              extensions={[haskellLanguage, syntaxHighlighting(haskellHighlighting)]}
+              height="100%"
+              onChange={changeSource}
+              placeholder="Write a Plinth module…"
+              theme="light"
               value={source}
-              onChange={(event) => {
-                setSource(event.target.value);
-                setSelectedExample('');
-              }}
-              spellCheck={false}
             />
           </div>
 
@@ -293,14 +515,36 @@ export default function Home() {
           </footer>
         </section>
 
-        <div className="split-handle" aria-hidden="true"><span /></div>
+        <div
+          aria-label="Resize source and output panes"
+          aria-valuemax={70}
+          aria-valuemin={30}
+          aria-valuenow={Math.round(splitPosition)}
+          className="split-handle"
+          onDoubleClick={() => {
+            setSplitPosition(54);
+            window.localStorage.setItem('plinth-workspace-split', '54');
+          }}
+          onKeyDown={resizeWithKeyboard}
+          onPointerCancel={finishResize}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setIsResizing(true);
+          }}
+          onPointerMove={updateSplitFromPointer}
+          onPointerUp={finishResize}
+          role="separator"
+          tabIndex={0}
+        >
+          <span />
+        </div>
 
         <section className="result-pane">
           <header className="pane-toolbar result-toolbar">
-            <div className="result-tabs" role="tablist" aria-label="Compiler output">
-              {(['uplc', 'flat', 'diagnostics'] as const).map((tab) => (
+            <div className="result-tabs" role="tablist" aria-label="Compiler and evaluator output">
+              {(['uplc', 'run', 'flat', 'diagnostics'] as const).map((tab) => (
                 <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} onClick={() => setActiveTab(tab)}>
-                  {tab === 'uplc' ? 'UPLC' : tab === 'flat' ? 'Flat' : 'Diagnostics'}
+                  {tab === 'uplc' ? 'UPLC' : tab === 'run' ? 'Run' : tab === 'flat' ? 'Flat' : 'Diagnostics'}
                   {tab === 'diagnostics' && diagnostics.length > 0 ? <small>{diagnostics.length}</small> : null}
                 </button>
               ))}
@@ -314,22 +558,137 @@ export default function Home() {
           {result && result.programs.length > 1 ? (
             <div className="program-tabs">
               {result.programs.map((item, index) => (
-                <button key={item.filename} type="button" aria-pressed={activeProgram === index} onClick={() => setActiveProgram(index)}>
+                <button
+                  key={item.filename}
+                  type="button"
+                  aria-pressed={activeProgram === index}
+                  onClick={() => {
+                    setActiveProgram(index);
+                    setEvaluation(null);
+                    setEvaluationError('');
+                  }}
+                >
                   program {index + 1}<small>{item.byteLength} B</small>
                 </button>
               ))}
             </div>
           ) : null}
 
-          <div className="result-heading">
-            <span><Terminal size={13} />{activeTab === 'uplc' ? 'Plinth compiler output' : activeTab === 'flat' ? 'Flat-encoded program' : 'Build messages'}</span>
-            {program ? <small>{program.byteLength.toLocaleString()} bytes</small> : null}
-          </div>
-          <pre className="compiler-output" data-empty={!program && activeTab !== 'diagnostics'}>{output}</pre>
+          {activeTab === 'run' ? (
+            <div className="run-workspace">
+              <section className="argument-panel" aria-label="CEK arguments">
+                <header className="section-heading">
+                  <span>
+                    <strong>Arguments</strong>
+                    <small>Applied left to right before evaluation</small>
+                  </span>
+                  <button type="button" onClick={addArgument}><Plus size={13} /> Add argument</button>
+                </header>
+
+                <div className="argument-list">
+                  {arguments_.length === 0 ? (
+                    <div className="no-arguments">No arguments — run the compiled program as-is.</div>
+                  ) : arguments_.map((argument, index) => (
+                    <div className="argument-row" key={`${index}-${argument.kind}`}>
+                      <span className="argument-index">{index + 1}</span>
+                      <span className="argument-type select-wrap">
+                        <select value={argument.kind} aria-label={`Argument ${index + 1} type`} onChange={(event) => changeArgumentKind(index, event.target.value as CekArgumentKind)}>
+                          {argumentKinds.map((item) => <option key={item.kind} value={item.kind}>{item.label}</option>)}
+                        </select>
+                        <ChevronDown size={12} />
+                      </span>
+                      {argument.kind === 'bool' ? (
+                        <span className="argument-value select-wrap">
+                          <select value={argument.value} aria-label={`Argument ${index + 1} value`} onChange={(event) => updateArgument(index, { value: event.target.value })}>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                          <ChevronDown size={12} />
+                        </span>
+                      ) : (
+                        <input
+                          aria-label={`Argument ${index + 1} value`}
+                          disabled={argument.kind === 'unit'}
+                          onChange={(event) => updateArgument(index, { value: event.target.value })}
+                          placeholder={argumentPlaceholders[argument.kind]}
+                          spellCheck={false}
+                          value={argument.value}
+                        />
+                      )}
+                      <button className="remove-argument" type="button" aria-label={`Remove argument ${index + 1}`} onClick={() => removeArgument(index)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="run-actions">
+                  <span>{program ? `${program.byteLength.toLocaleString()} byte Flat program` : 'Compile a program before running it'}</span>
+                  <button className="run-button" type="button" disabled={!program || runtimeState !== 'ready'} onClick={() => void runEvaluation()}>
+                    {runtimeState === 'evaluating' ? <LoaderCircle size={14} /> : <Play size={14} />}
+                    Run CEK machine
+                  </button>
+                </div>
+              </section>
+
+              <section className="evaluation-panel" aria-live="polite">
+                <header className="section-heading">
+                  <span>
+                    <strong>Evaluation result</strong>
+                    <small>Plinth CEK · default cost model</small>
+                  </span>
+                  {evaluation ? (
+                    <span className={`outcome-badge ${evaluation.succeeded ? 'success' : 'failure'}`}>
+                      {evaluation.succeeded ? <Check size={11} /> : null}
+                      {evaluation.succeeded ? 'Success' : 'Machine failure'}
+                    </span>
+                  ) : null}
+                </header>
+
+                {evaluation ? (
+                  <>
+                    <div className="budget-grid">
+                      <div><span>CPU</span><strong>{formatNumber(evaluation.budget.cpu)}</strong><small>picoseconds</small></div>
+                      <div><span>Memory</span><strong>{formatNumber(evaluation.budget.memory)}</strong><small>words</small></div>
+                      <div><span>Elapsed</span><strong>{evaluation.elapsedMs < 1000 ? Math.round(evaluation.elapsedMs) : (evaluation.elapsedMs / 1000).toFixed(1)}</strong><small>{evaluation.elapsedMs < 1000 ? 'milliseconds' : 'seconds'}</small></div>
+                      <div><span>Traces</span><strong>{evaluation.logs.length}</strong><small>emitted</small></div>
+                    </div>
+                    <div className="machine-result">
+                      <span>{evaluation.succeeded ? 'Reduced UPLC' : 'Evaluation error'}</span>
+                      <pre data-failure={!evaluation.succeeded}>{evaluation.succeeded ? evaluation.value : evaluation.error}</pre>
+                    </div>
+                    {evaluation.logs.length > 0 ? (
+                      <div className="trace-output">
+                        <span>Trace log</span>
+                        <ol>{evaluation.logs.map((log, index) => <li key={`${index}-${log}`}>{log}</li>)}</ol>
+                      </div>
+                    ) : null}
+                  </>
+                ) : evaluationError ? (
+                  <div className="evaluation-empty error"><strong>Runner error</strong><span>{evaluationError}</span></div>
+                ) : (
+                  <div className="evaluation-empty">
+                    <span className="play-mark"><Play size={19} /></span>
+                    <strong>{program ? 'Ready to evaluate' : 'Compile first'}</strong>
+                    <span>{program ? 'Set the arguments above, then run the real CEK machine in this browser.' : 'Your compiled Flat UPLC will appear here ready to run.'}</span>
+                  </div>
+                )}
+              </section>
+            </div>
+          ) : (
+            <>
+              <div className="result-heading">
+                <span><Terminal size={13} />{activeTab === 'uplc' ? 'Plinth compiler output' : activeTab === 'flat' ? 'Flat-encoded program' : 'Build messages'}</span>
+                {program ? <small>{program.byteLength.toLocaleString()} bytes</small> : null}
+              </div>
+              <pre className="compiler-output" data-empty={!program && activeTab !== 'diagnostics'}>{textOutput}</pre>
+            </>
+          )}
+
           <footer className="result-status">
             <span className="status-dot" data-state={runtimeState} />
             <span>{runtimeDetail}</span>
-            {program ? <span className="result-ok"><Check size={11} /> compiled locally</span> : null}
+            {program ? <span className="result-ok"><Check size={11} /> local browser runtime</span> : null}
           </footer>
         </section>
       </section>
@@ -337,9 +696,9 @@ export default function Home() {
       <footer className="app-statusbar">
         <span>Plinth 1.66</span>
         <span>GHC 9.12.4</span>
-        <span>WASI worker</span>
+        <span>CEK · WASI</span>
         <span className="status-spacer" />
-        <span>Source stays in this browser</span>
+        <span>Source and execution stay in this browser</span>
       </footer>
     </main>
   );

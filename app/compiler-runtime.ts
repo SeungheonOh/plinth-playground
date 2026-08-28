@@ -16,20 +16,46 @@ export type CompileResult = {
   programs: CompiledProgram[];
 };
 
+export type CekArgumentKind = 'integer' | 'bytes' | 'string' | 'bool' | 'unit' | 'data';
+
+export type CekArgument = {
+  kind: CekArgumentKind;
+  value: string;
+};
+
+export type CekEvaluationResult = {
+  elapsedMs: number;
+  succeeded: boolean;
+  value: string;
+  error?: string;
+  budget: {
+    cpu: string;
+    memory: string;
+  };
+  logs: string[];
+};
+
 export type BrowserCompiler = {
   compile: (source: string, listener: OutputListener) => Promise<CompileResult>;
+  evaluate: (filename: string, args: CekArgument[]) => Promise<CekEvaluationResult>;
 };
 
 type WorkerEvent =
   | { type: 'progress'; progress: number; detail: string }
   | { type: 'ready' }
   | { type: 'output'; requestId: number; kind: OutputKind; message: string }
-  | { type: 'result'; requestId: number; result: CompileResult }
+  | { type: 'compile-result'; requestId: number; result: CompileResult }
+  | { type: 'evaluate-result'; requestId: number; result: CekEvaluationResult }
   | { type: 'error'; requestId?: number; message: string };
 
 type PendingCompile = {
   listener: OutputListener;
   resolve: (result: CompileResult) => void;
+  reject: (error: Error) => void;
+};
+
+type PendingEvaluation = {
+  resolve: (result: CekEvaluationResult) => void;
   reject: (error: Error) => void;
 };
 
@@ -41,6 +67,7 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
       name: 'plinth-browser-compiler',
     });
     const pending = new Map<number, PendingCompile>();
+    const pendingEvaluations = new Map<number, PendingEvaluation>();
     let nextRequestId = 1;
     let initialized = false;
 
@@ -64,6 +91,16 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
               worker.postMessage({ type: 'compile', requestId, source });
             });
           },
+          evaluate(filename, args) {
+            const requestId = nextRequestId++;
+            return new Promise<CekEvaluationResult>((resolveEvaluation, rejectEvaluation) => {
+              pendingEvaluations.set(requestId, {
+                resolve: resolveEvaluation,
+                reject: rejectEvaluation,
+              });
+              worker.postMessage({ type: 'evaluate', requestId, filename, args });
+            });
+          },
         });
         return;
       }
@@ -71,17 +108,26 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
         pending.get(message.requestId)?.listener(message.kind, message.message);
         return;
       }
-      if (message.type === 'result') {
+      if (message.type === 'compile-result') {
         const request = pending.get(message.requestId);
         pending.delete(message.requestId);
+        request?.resolve(message.result);
+        return;
+      }
+      if (message.type === 'evaluate-result') {
+        const request = pendingEvaluations.get(message.requestId);
+        pendingEvaluations.delete(message.requestId);
         request?.resolve(message.result);
         return;
       }
       if (message.type === 'error') {
         if (message.requestId !== undefined) {
           const request = pending.get(message.requestId);
+          const evaluation = pendingEvaluations.get(message.requestId);
           pending.delete(message.requestId);
+          pendingEvaluations.delete(message.requestId);
           request?.reject(new Error(message.message));
+          evaluation?.reject(new Error(message.message));
         } else if (!initialized) {
           reject(new Error(message.message));
         }
@@ -92,7 +138,9 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
       const error = new Error(event.message || 'The Plinth compiler worker stopped');
       if (!initialized) reject(error);
       for (const request of pending.values()) request.reject(error);
+      for (const request of pendingEvaluations.values()) request.reject(error);
       pending.clear();
+      pendingEvaluations.clear();
     };
   });
 
