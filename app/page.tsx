@@ -18,6 +18,8 @@ import {
   Hammer,
   Link,
   LoaderCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   Share2,
@@ -332,6 +334,7 @@ export default function Home() {
   const [moduleDraftError, setModuleDraftError] = useState('');
   const [isAddingModule, setIsAddingModule] = useState(false);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const [isFileTreeOpen, setIsFileTreeOpen] = useState(true);
   const [selectedExample, setSelectedExample] = useState(examples[0].id);
   const [compiler, setCompiler] = useState<BrowserCompiler | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState>('loading');
@@ -400,6 +403,14 @@ export default function Home() {
       request += 1;
       window.removeEventListener('hashchange', restoreSharedProject);
     };
+  }, []);
+
+  useEffect(() => {
+    const restorePreference = window.setTimeout(() => {
+      const saved = window.localStorage.getItem('plinth-file-tree-open');
+      if (saved !== null) setIsFileTreeOpen(saved !== 'false');
+    }, 0);
+    return () => window.clearTimeout(restorePreference);
   }, []);
 
   useEffect(() => {
@@ -549,6 +560,14 @@ export default function Home() {
     setIsAddingModule(false);
     setModuleDraft('');
     setModuleDraftError('');
+  };
+
+  const toggleFileTree = () => {
+    setIsFileTreeOpen((current) => {
+      const next = !current;
+      window.localStorage.setItem('plinth-file-tree-open', String(next));
+      return next;
+    });
   };
 
   const addModule = (event: ReactFormEvent<HTMLFormElement>) => {
@@ -789,9 +808,21 @@ export default function Home() {
       <section ref={workspaceRef} className="workspace" style={workspaceStyle} aria-label="Plinth compiler workspace">
         <section className="source-pane">
           <header className="pane-toolbar source-toolbar">
-            <div className="active-file-title" title={activeModule}>
-              <FileCode2 size={14} />
-              <span>{activeModule}</span>
+            <div className="source-toolbar-file">
+              <button
+                aria-label={`${isFileTreeOpen ? 'Hide' : 'Show'} project files`}
+                aria-pressed={isFileTreeOpen}
+                className="file-tree-toggle"
+                onClick={toggleFileTree}
+                title={`${isFileTreeOpen ? 'Hide' : 'Show'} project files`}
+                type="button"
+              >
+                {isFileTreeOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+              </button>
+              <div className="active-file-title" title={activeModule}>
+                <FileCode2 size={14} />
+                <span>{activeModule}</span>
+              </div>
             </div>
             <label className="example-picker">
               <span>Example</span>
@@ -805,7 +836,7 @@ export default function Home() {
             </label>
           </header>
 
-          <div className="source-workspace">
+          <div className="source-workspace" data-tree-open={isFileTreeOpen}>
             <aside className="project-tree" aria-label="Project files">
               <header className="project-tree-heading">
                 <span><Files size={13} /> Project <small>{modules.length}</small></span>
