@@ -29,9 +29,10 @@ tests the driver, browser reactor, decoder, evaluator, and optional-library
 shim. The rootfs script strips static build material and writes the deployable
 chunked runtime to `../public/runtime`.
 
-The runtime also includes Plutarch 1.14.0 from the pinned
-`Plutonomicon/plutarch-plutus` revision. Browser projects can export a locally
-defined Plutarch term by calling `Plutarch.Browser.exportScript` from `main`:
+The runtime also includes Plutarch 1.12.0 from the comparison repository's
+pinned `SeungheonOh/plutarch-plutus` compatibility fork. Browser projects can
+export a locally defined Plutarch term by calling
+`Plutarch.Browser.exportScript` from `main`:
 
 ```haskell
 successor :: Term s (PInteger :--> PInteger)

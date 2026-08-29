@@ -48,6 +48,7 @@ wasm32-wasi-cabal \
   build \
   lib:plinth-browser-utils \
   lib:plutarch-browser \
+  lib:plutarch-ledger-api \
   lib:plutus-tx-plugin \
   exe:uplc-ghc-9-12
 

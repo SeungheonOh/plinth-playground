@@ -8,6 +8,7 @@ import { gunzipSync } from "node:zlib";
 const workdir = path.dirname(fileURLToPath(import.meta.url));
 const sourceFile = process.env.BROWSER_SOURCE ?? "BrowserPlinth.hs";
 const bundledProjectFile = process.env.BROWSER_PROJECT_PAYLOAD;
+const projectLinksFile = process.env.BROWSER_PROJECT_LINKS;
 const extraSourceFiles = process.env.BROWSER_EXTRA_SOURCES
   ?.split(",")
   .map((source) => source.trim())
@@ -83,19 +84,34 @@ const compile = await linker.exportFuncs.uplcGhcBrowser(
   libdir,
   `${storePackageDb}:${projectPackageDb}:`,
 );
-let modules;
-if (bundledProjectFile) {
+function decodeProjectPayload(payload) {
+  if (payload[0] !== "z") {
+    throw new Error("Project payload is not gzip-compressed");
+  }
+  const encoded = payload.slice(1).replace(/-/g, "+").replace(/_/g, "/");
+  return JSON.parse(gunzipSync(Buffer.from(encoded, "base64")));
+}
+
+let projects;
+if (projectLinksFile) {
+  const markdown = await fs.readFile(path.resolve(workdir, projectLinksFile), "utf8");
+  const payloads = [
+    ...markdown.matchAll(/https:\/\/plinth\.isotopy\.xyz\/#p=(z[A-Za-z0-9_-]+)/g),
+  ].map((match) => match[1]);
+  if (payloads.length === 0) throw new Error("Markdown file contains no project links");
+  projects = payloads.map((payload) => {
+    const decoded = decodeProjectPayload(payload);
+    return decoded.modules.map(({ name, source }) => [name, source]);
+  });
+} else if (bundledProjectFile) {
   const payloadModule = await fs.readFile(path.join(workdir, bundledProjectFile), "utf8");
   const chunks = [...payloadModule.matchAll(/^\s*'([^']*)',\s*$/gm)]
     .map((match) => match[1]);
   if (chunks.length === 0) throw new Error("Bundled example contains no project payload");
-  const payload = chunks.join("");
-  if (payload[0] !== "z") throw new Error("Bundled example is not gzip-compressed");
-  const encoded = payload.slice(1).replace(/-/g, "+").replace(/_/g, "/");
-  const decoded = JSON.parse(gunzipSync(Buffer.from(encoded, "base64")));
-  modules = decoded.modules.map(({ name, source }) => [name, source]);
+  const decoded = decodeProjectPayload(chunks.join(""));
+  projects = [decoded.modules.map(({ name, source }) => [name, source])];
 } else {
-  modules = [
+  const modules = [
     ["Main.hs", await fs.readFile(path.join(workdir, sourceFile), "utf8")],
   ];
   for (const extraSourceSpec of extraSourceFiles) {
@@ -111,49 +127,58 @@ if (bundledProjectFile) {
       await fs.readFile(path.join(workdir, sourceFilePath), "utf8"),
     ]);
   }
+  projects = [modules];
 }
-const project = [
-  "PLINTH_PROJECT_V1",
-  ...modules.flatMap(([filename, source]) => [filename, source]),
-].join("\0");
-const compiledOutputs = await compile(
-  [
-    "-package=plutus-tx",
-    ...extraArgs,
-    "-fplugin-opt=Plinth.Plugin:dump-uplc",
-    "-Wno-missed-extra-shared-lib",
-    "-v1",
-    "-fno-full-laziness",
-    "-fno-ignore-interface-pragmas",
-    "-fno-omit-interface-pragmas",
-    "-fno-spec-constr",
-    "-fno-specialise",
-    "-fno-strictness",
-    "-fno-unbox-small-strict-fields",
-    "-fno-unbox-strict-fields",
-    "-fprefer-byte-code",
-    "-fno-unoptimized-core-for-interpreter",
-    "-fno-write-interface",
-    "-fforce-recomp",
-  ].join(" "),
-  project,
-);
 
-const outputs = compiledOutputs.trim().split("\n");
-if (outputs.length !== 1) {
-  throw new Error(`Expected one compiled UPLC program, got ${outputs.length}`);
-}
-for (const output of outputs) {
-  const [filename, hex] = output.split("\t");
-  if (!filename || !hex || hex.length % 2 !== 0) {
-    throw new Error(`Invalid compiler output record: ${output}`);
+for (const [projectIndex, modules] of projects.entries()) {
+  const project = [
+    "PLINTH_PROJECT_V1",
+    ...modules.flatMap(([filename, source]) => [filename, source]),
+  ].join("\0");
+  const compiledOutputs = await compile(
+    [
+      "-package=plutus-tx",
+      ...extraArgs,
+      "-fplugin-opt=Plinth.Plugin:dump-uplc",
+      "-Wno-missed-extra-shared-lib",
+      "-v1",
+      "-fno-full-laziness",
+      "-fno-ignore-interface-pragmas",
+      "-fno-omit-interface-pragmas",
+      "-fno-spec-constr",
+      "-fno-specialise",
+      "-fno-strictness",
+      "-fno-unbox-small-strict-fields",
+      "-fno-unbox-strict-fields",
+      "-fprefer-byte-code",
+      "-fno-unoptimized-core-for-interpreter",
+      "-fno-write-interface",
+      "-fforce-recomp",
+    ].join(" "),
+    project,
+  );
+
+  const outputs = compiledOutputs.trim().split("\n").filter(Boolean);
+  const expectedOneOutput = projects.length === 1 && !projectLinksFile;
+  if (outputs.length === 0 || (expectedOneOutput && outputs.length !== 1)) {
+    throw new Error(
+      `Expected ${expectedOneOutput ? "one" : "at least one"} compiled UPLC program, got ${outputs.length}`,
+    );
   }
-  const bytes = Buffer.from(hex, "hex");
-  if (bytes.length === 0) {
-    throw new Error(`Compiler emitted an empty UPLC program: ${filename}`);
+  for (const output of outputs) {
+    const [filename, hex] = output.split("\t");
+    if (!filename || !hex || hex.length % 2 !== 0) {
+      throw new Error(`Invalid compiler output record: ${output}`);
+    }
+    const bytes = Buffer.from(hex, "hex");
+    if (bytes.length === 0) {
+      throw new Error(`Compiler emitted an empty UPLC program: ${filename}`);
+    }
+    const outputPath = path.join(workdir, "BrowserPlinth.uplc-flat");
+    await fs.writeFile(outputPath, bytes);
+    await fs.rm(path.join(workdir, filename), { force: true });
+    console.log(
+      `Project ${projectIndex + 1}/${projects.length}: ${filename} (${bytes.length} bytes)`,
+    );
   }
-  const outputPath = path.join(workdir, "BrowserPlinth.uplc-flat");
-  await fs.writeFile(outputPath, bytes);
-  await fs.rm(path.join(workdir, filename), { force: true });
-  console.log(`Flat UPLC: ${outputPath} (${bytes.length} bytes)`);
 }

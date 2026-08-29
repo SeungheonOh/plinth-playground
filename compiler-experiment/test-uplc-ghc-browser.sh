@@ -80,7 +80,7 @@ esac
 echo "$DECODED_MULTI"
 
 BROWSER_SOURCE=BrowserPlutarch.hs \
-BROWSER_EXTRA_ARGS="-package=plutarch -package=plutarch-browser" \
+BROWSER_EXTRA_ARGS="-package-id=plutarch-1.12.0-inplace -package=plutarch-browser" \
   node test-uplc-ghc-browser.mjs
 DECODED_PLUTARCH=$(node "$WASM_RUN" decode-uplc.wasm BrowserPlinth.uplc-flat)
 

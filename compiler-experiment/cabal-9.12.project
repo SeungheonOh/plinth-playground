@@ -58,13 +58,15 @@ packages:
   ./.compiler-deps/vendor/libsodium-clib
   ./.compiler-deps/vendor/cborg/cborg
   ./.compiler-deps/vendor/memory-0.18.0
+  ./.compiler-deps/vendor/cryptonite-0.30
   ./.compiler-deps/vendor/crypton-1.1.4
   ./.compiler-deps/plutus/plutus-tx-plugin
   ./.compiler-deps/plutus/plutus-tx
   ./.compiler-deps/plutus/plutus-core
   ./.compiler-deps/plutus/plutus-metatheory
   ./.compiler-deps/plutus/plutus-ledger-api
-  ./.compiler-deps/plutarch
+  ./.compiler-deps/plutarch-comparison
+  ./.compiler-deps/plutarch-comparison/plutarch-ledger-api
 
 package secp256k1-clib
   flags: +schnorrsig +recovery +ecdh +extrakeys
@@ -85,6 +87,9 @@ package plutus-tx-plugin
   profiling: False
 
 package plutarch
+  ghc-options: -Wwarn
+
+package plutarch-ledger-api
   ghc-options: -Wwarn
 
 tests: False

@@ -1,0 +1,12 @@
+diff --git a/cryptonite.cabal b/cryptonite.cabal
+--- a/cryptonite.cabal
++++ b/cryptonite.cabal
+@@ -259,6 +259,8 @@ library
+     extra-libraries: pthread
+   default-language:  Haskell2010
+   cc-options:        -std=gnu99
++  if os(wasi)
++    cc-options:      -DARGON2_NO_THREADS
+   if flag(old_toolchain_inliner)
+     cc-options:      -fgnu89-inline
+   C-sources:         cbits/cryptonite_chacha.c
