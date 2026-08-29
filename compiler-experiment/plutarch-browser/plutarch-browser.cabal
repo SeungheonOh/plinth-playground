@@ -14,5 +14,4 @@ library
       plutarch ==1.14.0,
       plutus-core ==1.66.0.0,
       plutus-core:flat ==1.66.0.0,
-      template-haskell,
       text

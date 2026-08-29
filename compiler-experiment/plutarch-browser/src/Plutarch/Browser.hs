@@ -1,22 +1,20 @@
-module Plutarch.Browser (dumpScript) where
+module Plutarch.Browser (exportScript) where
 
 import Data.ByteString qualified as ByteString
 import Data.Char (isAlphaNum)
 import Data.Text qualified as Text
-import Language.Haskell.TH.Syntax (Dec, Q, runIO)
 import Plutarch.Script (Script (unScript))
 import PlutusCore.Flat (flat)
 import UntypedPlutusCore qualified as UPLC
 
--- | Export a compiled Plutarch script in the Flat format consumed by the
--- playground's decoder and CEK evaluator.
-dumpScript :: String -> Either Text.Text Script -> Q [Dec]
-dumpScript requestedName result = do
-  script <- either (fail . Text.unpack) pure result
-  runIO . ByteString.writeFile outputName . flat . UPLC.UnrestrictedProgram .
+-- | Export a compiled Plutarch script from 'Main.main' in the Flat format
+-- consumed by the playground's decoder and CEK evaluator.
+exportScript :: String -> Either Text.Text Script -> IO ()
+exportScript requestedName result = do
+  script <- either (ioError . userError . Text.unpack) pure result
+  ByteString.writeFile outputName . flat . UPLC.UnrestrictedProgram .
     UPLC.programMapNames UPLC.fakeNameDeBruijn $
       unScript script
-  pure []
   where
     outputName = sanitize requestedName <> ".uplc-flat"
 

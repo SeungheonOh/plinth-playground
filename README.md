@@ -25,9 +25,10 @@ and Plutus Data constants. It reports the reduced UPLC, execution budget, and
 trace logs. CEK execution is budget-bounded so nonterminating programs cannot
 run indefinitely.
 
-The Plutarch example uses `Plutarch.Browser.dumpScript` to export a typed term
-as Flat UPLC. That output follows the same decode, argument-application, and CEK
-execution path as scripts emitted by the Plinth plugin.
+The Plutarch example calls `Plutarch.Browser.exportScript` from `Main.main` to
+export a locally defined typed term as Flat UPLC. Every successful project runs
+`Main.main`; the output then follows the same decode, argument-application, and
+CEK execution path as scripts emitted by the Plinth plugin.
 
 ## Local development
 

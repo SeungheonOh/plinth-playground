@@ -81,22 +81,18 @@ const examples = [
     label: 'Plutarch successor',
     args: [{ kind: 'integer', value: '41' }],
     source: `{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
 module Main where
 
-import Plutarch.Browser (dumpScript)
+import Plutarch.Browser (exportScript)
 import Plutarch.Internal.Term (compile)
 import Plutarch.Prelude
 
-$(dumpScript "plutarchSuccessor" $
-    compile mempty $
-      (plam (\\value -> value + 1) ::
-        forall s. Term s (PInteger :--> PInteger)))
+successor :: Term s (PInteger :--> PInteger)
+successor = plam $ \\value -> value + 1
 
 main :: IO ()
-main = pure ()`,
+main = exportScript "plutarchSuccessor" $ compile mempty successor`,
   },
   {
     id: 'successor',
@@ -252,7 +248,7 @@ type ShareState = 'idle' | 'copying' | 'copied' | 'error';
 
 const waitingMessage = `Compile the project to inspect the Untyped Plutus Core emitted by Plinth or Plutarch.
 
-GHC, Plinth, and the CEK evaluator all run locally in this browser. The first visit downloads the compiler runtime; later visits use the browser cache.`;
+GHC, Plinth, and the CEK evaluator all run locally in this browser. Every successful build runs Main.main. The first visit downloads the compiler runtime; later visits use the browser cache.`;
 
 function formatFlat(hex: string) {
   return hex.match(/.{1,32}/g)?.join('\n') ?? hex;

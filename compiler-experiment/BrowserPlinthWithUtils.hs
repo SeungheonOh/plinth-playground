@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fplugin-opt Plinth.Plugin:dump-uplc #-}
 
-module BrowserPlinth where
+module Main where
 
 import PlutusTx.Code (CompiledCode)
 import PlutusTx.TH (compile)
@@ -13,3 +13,6 @@ addOne x = plusInteger x 1
 
 compiledAddOne :: CompiledCode (Integer -> Integer)
 compiledAddOne = $$(compile [||addOne||])
+
+main :: IO ()
+main = pure ()

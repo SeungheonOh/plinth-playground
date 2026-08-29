@@ -3,21 +3,18 @@
 
 module UplcGhcBrowser (uplcGhcBrowser) where
 
-import Control.Exception qualified as Exception
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Coerce (coerce)
 import Data.Char (isAlphaNum)
+import Data.Dynamic (fromDynamic)
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.Version (Version (Version))
 import Data.Word (Word8)
 import Data.ByteString qualified as ByteString
-import Data.ByteString.Char8 qualified as ByteString.Char8
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text.Encoding
 import GHC
-import GHC.Data.ShortText qualified as ShortText
 import GHC.Driver.Backend (interpreterBackend)
 import GHC.Driver.Config.Diagnostic (initDiagOpts, initPrintConfig)
 import GHC.Driver.Env (hsc_plugins)
@@ -42,11 +39,6 @@ import GHC.Driver.Session
   , verbosity
   )
 import GHC.Runtime.Loader (initializeSessionPlugins)
-import GHC.Unit.Database
-  ( DbUnitInfo
-  , GenericUnitInfo (..)
-  , writePackageDb
-  )
 import GHC.Utils.Exception (evaluate)
 import GHC.Wasm.Prim
   ( JSString (JSString)
@@ -110,69 +102,24 @@ uplcGhcBrowser jsLibdir jsPackagePath =
         freeJSVal $ coerce jsProject
         removePreviousOutputs
         writeProject projectFiles modules
-        let supportModules = filter ((/= "Main.hs") . fst) modules
-            supportPaths = map ((projectRoot </>) . fst) supportModules
-            hasSupportModules = not $ null supportPaths
-        when hasSupportModules $ do
-          compileSupportModules libdir args supportPaths
-          writeUserPackageDb $ map (moduleNameFromPath . fst) supportModules
-          mapM_ removeFile supportPaths
-        setEnv
-          "GHC_PACKAGE_PATH"
-          (if hasSupportModules then userPackageDb <> ":" <> packagePath else packagePath)
-        compileMainModule libdir args hasSupportModules
-        setEnv "GHC_PACKAGE_PATH" packagePath
+        compileProjectModules
+          libdir
+          args
+          (map ((projectRoot </>) . fst) modules)
         toJSString <$> collectOutputs
-compileSupportModules :: FilePath -> [String] -> [FilePath] -> IO ()
-compileSupportModules libdir args supportPaths = do
-  supportSession <- Session <$> newIORef undefined
-  flip reflectGhc supportSession $ withCleanupSession $ do
-    initGhcMonad $ Just libdir
-    initial <- getSessionDynFlags
-    logger <- getLogger
-    (parsedFlags, leftovers, warnings) <-
-      parseDynamicFlags
-        logger
-        initial
-        ( map noLoc args
-            <> [ noLoc "-dynamic"
-               , noLoc "-O1"
-               , noLoc "-fno-unoptimized-core-for-interpreter"
-               , noLoc $ "-this-unit-id=" <> userPackageId
-               ]
-        )
-    when (not $ null leftovers) $
-      fail $ "unparsed support module arguments: " <> show (map unLoc leftovers)
-    let flags =
-          parsedFlags
-            { ghcMode = CompManager
-            , backend = interpreterBackend
-            , ghcLink = LinkInMemory
-            , hiSuf_ = "dyn_hi"
-            , verbosity = 1
-            }
-            `gopt_set` Opt_WriteIfSimplifiedCore
-    setSessionDynFlags flags
-    logger' <- getLogger
-    liftIO
-      $ printOrThrowDiagnostics
-        logger'
-        (initPrintConfig flags)
-        (initDiagOpts flags)
-      $ GhcDriverMessage <$> warnings
-    setTargets =<< mapM (\path -> guessTarget path Nothing Nothing) supportPaths
-    result <- load LoadAllTargets
-    when (failed result) $ fail "uplc-ghc support module load returned Failed"
 
-compileMainModule :: FilePath -> [String] -> Bool -> IO ()
-compileMainModule libdir args hasSupportModules = do
+compileProjectModules :: FilePath -> [String] -> [FilePath] -> IO ()
+compileProjectModules libdir args modulePaths = do
   session <- Session <$> newIORef undefined
   flip reflectGhc session $ withCleanupSession $ do
     initGhcMonad $ Just libdir
     initial <- getSessionDynFlags
     logger <- getLogger
     let packageArgs =
-          "-dynamic" : ["-package=" <> userPackageId | hasSupportModules]
+          [ "-dynamic"
+          , "-O1"
+          , "-fno-unoptimized-core-for-interpreter"
+          ]
     (parsedFlags, leftovers, warnings) <-
       parseDynamicFlags logger initial $ map noLoc $ args <> packageArgs
     when (not $ null leftovers) $
@@ -180,7 +127,9 @@ compileMainModule libdir args hasSupportModules = do
     let flags =
           parsedFlags
             { ghcMode = CompManager
-            , ghcLink = NoLink
+            , backend = interpreterBackend
+            , ghcLink = LinkInMemory
+            , hiSuf_ = "dyn_hi"
             , verbosity = 1
             }
             `gopt_set` Opt_WriteIfSimplifiedCore
@@ -195,74 +144,17 @@ compileMainModule libdir args hasSupportModules = do
       $ GhcDriverMessage <$> warnings
     installPlinthPlugin flags
     initializeSessionPlugins
-    setTargets =<< (: []) <$> guessTarget (projectRoot </> "Main.hs") Nothing Nothing
+    setTargets =<< mapM (\path -> guessTarget path Nothing Nothing) modulePaths
     result <- load LoadAllTargets
     when (failed result) $ fail "uplc-ghc load returned Failed"
+    setContext [IIDecl $ simpleImportDecl $ mkModuleName "Main"]
+    compiledMain <- dynCompileExpr "Main.main"
+    case fromDynamic compiledMain of
+      Just mainAction -> liftIO (mainAction :: IO ())
+      Nothing -> fail "Main.main must have type IO ()"
 
 projectRoot :: FilePath
 projectRoot = "/tmp/plinth-project"
-
-userPackageId :: String
-userPackageId = "plinth-user-modules"
-
-userPackageDb :: FilePath
-userPackageDb = projectRoot </> "package.conf.d"
-
-writeUserPackageDb :: [String] -> IO ()
-writeUserPackageDb moduleNames = do
-  createDirectoryIfMissing True userPackageDb
-  let cachePath = userPackageDb </> "package.cache"
-  result <-
-    Exception.try (writePackageDb cachePath [userPackageInfo moduleNames] ())
-      :: IO (Either Exception.IOException ())
-  case result of
-    Right () -> pure ()
-    Left packageDbError -> do
-      cacheExists <- doesFileExist cachePath
-      unless cacheExists $ Exception.throwIO packageDbError
-
-userPackageInfo :: [String] -> DbUnitInfo
-userPackageInfo moduleNames =
-  GenericUnitInfo
-    { unitId = bytes userPackageId
-    , unitInstanceOf = bytes userPackageId
-    , unitInstantiations = []
-    , unitPackageId = bytes userPackageId
-    , unitPackageName = bytes userPackageId
-    , unitPackageVersion = Version [0] []
-    , unitComponentName = Nothing
-    , unitAbiHash = shortText ""
-    , unitDepends = []
-    , unitAbiDepends = []
-    , unitImportDirs = [shortText projectRoot]
-    , unitLibraries = []
-    , unitExtDepLibsSys = []
-    , unitExtDepLibsGhc = []
-    , unitLibraryDirs = []
-    , unitLibraryDynDirs = []
-    , unitExtDepFrameworks = []
-    , unitExtDepFrameworkDirs = []
-    , unitLinkerOptions = []
-    , unitCcOptions = []
-    , unitIncludes = []
-    , unitIncludeDirs = []
-    , unitHaddockInterfaces = []
-    , unitHaddockHTMLs = []
-    , unitExposedModules = [(bytes moduleName, Nothing) | moduleName <- moduleNames]
-    , unitHiddenModules = []
-    , unitIsIndefinite = False
-    , unitIsExposed = True
-    , unitIsTrusted = True
-    }
-  where
-    bytes = ByteString.Char8.pack
-    shortText = ShortText.pack
-
-moduleNameFromPath :: FilePath -> String
-moduleNameFromPath path = map slashToDot $ take (length path - length ".hs") path
-  where
-    slashToDot '/' = '.'
-    slashToDot character = character
 
 projectMarker :: String
 projectMarker = "PLINTH_PROJECT_V1"
@@ -351,7 +243,9 @@ removePreviousOutputs = do
 collectOutputs :: IO String
 collectOutputs = do
   outputs <- sort . filter isBrowserOutput <$> listDirectory "."
-  when (null outputs) $ fail "Plinth produced no Flat UPLC output"
+  when (null outputs) $
+    fail
+      "Project produced no Flat UPLC output. Use PlutusTx.compile or call Plutarch.Browser.exportScript from Main.main."
   encoded <- forM outputs $ \output -> do
     bytes <- ByteString.readFile output
     pure $ output <> "\t" <> concatMap hexByte (ByteString.unpack bytes)

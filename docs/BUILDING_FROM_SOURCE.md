@@ -157,14 +157,14 @@ All local changes to upstream source are stored in
 | `memory-wasi.patch` | Fixes 32-bit GHC primitives, C FFI return types, endianness, and emulated `mman` linkage. |
 
 The browser-facing compiler itself is
-`compiler-experiment/UplcGhcBrowser.hs`. It creates fresh GHC sessions,
-registers the plugin statically, compiles support modules into a temporary
-dynamic package, compiles `Main.hs`, and returns every emitted Flat UPLC file
-as hexadecimal bytes. Dynamic interfaces are mandatory because the stripped
-browser filesystem contains `.dyn_hi` files and shared libraries, not static
-`.hi`/`.a` artifacts. Support modules use GHC's interpreter backend and `-O1`
-so their dynamic interfaces retain the unfoldings that Plinth needs when
-compiling imports from `Main.hs`.
+`compiler-experiment/UplcGhcBrowser.hs`. It creates a fresh GHC interpreter
+session, registers the plugin statically, compiles every project module with
+`-O1`, runs `Main.main`, and returns every emitted Flat UPLC file as hexadecimal
+bytes. Keeping the whole project in one interpreter session makes locally
+defined and imported values available both to Plinth compilation and to the
+executed `main`. Dynamic interfaces are mandatory because the stripped browser
+filesystem contains `.dyn_hi` files and shared libraries, not static `.hi`/`.a`
+artifacts.
 
 ## Build products
 
@@ -221,7 +221,8 @@ The default compiler build runs
 `compiler-experiment/test-uplc-ghc-browser.sh`. It validates all WASM binaries,
 loads the reactor through GHC's actual `dyld.mjs`, and checks:
 
-1. a single `Main.hs` using `$$(PlutusTx.compile ...)`;
+1. a single `Main.hs` using `$$(PlutusTx.compile ...)`, including an assertion
+   that its `main` action ran;
 2. a program importing the packaged browser `Utils` module;
 3. a two-file project whose `Main.hs` imports a Plinth function from a support
    module;

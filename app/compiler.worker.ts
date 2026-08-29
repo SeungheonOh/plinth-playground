@@ -43,9 +43,9 @@ const PLINTH_FLAGS = [
   '-fno-unbox-small-strict-fields',
   '-fno-unbox-strict-fields',
   '-fprefer-byte-code',
+  '-fno-unoptimized-core-for-interpreter',
   '-fwrite-interface',
   '-fforce-recomp',
-  '-fno-code',
   '-i/tmp/plinth-project',
 ].join(' ');
 

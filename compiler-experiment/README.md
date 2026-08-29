@@ -30,15 +30,18 @@ shim. The rootfs script strips static build material and writes the deployable
 chunked runtime to `../public/runtime`.
 
 The runtime also includes Plutarch 1.14.0 from the pinned
-`Plutonomicon/plutarch-plutus` revision. Browser projects can export a Plutarch
-term to the playground with `Plutarch.Browser.dumpScript`:
+`Plutonomicon/plutarch-plutus` revision. Browser projects can export a locally
+defined Plutarch term by calling `Plutarch.Browser.exportScript` from `main`:
 
 ```haskell
-$(dumpScript "successor" $
-    compile mempty $
-      (plam (\value -> value + 1) ::
-        forall s. Term s (PInteger :--> PInteger)))
+successor :: Term s (PInteger :--> PInteger)
+successor = plam $ \value -> value + 1
+
+main :: IO ()
+main = exportScript "successor" $ compile mempty successor
 ```
 
 The helper serializes the compiled Plutarch `Script` to Flat UPLC, which is
 then decoded and evaluated by the same in-browser CEK machine as Plinth output.
+The browser compiler runs `Main.main` after every successful build, including
+ordinary Plinth projects.

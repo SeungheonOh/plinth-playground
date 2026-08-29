@@ -1,17 +1,13 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
 module Main where
 
-import Plutarch.Browser (dumpScript)
+import Plutarch.Browser (exportScript)
 import Plutarch.Internal.Term (compile)
 import Plutarch.Prelude
 
-$(dumpScript "BrowserPlutarch" $
-    compile mempty $
-      (plam (\value -> value + 1) ::
-        forall s. Term s (PInteger :--> PInteger)))
+successor :: Term s (PInteger :--> PInteger)
+successor = plam $ \value -> value + 1
 
 main :: IO ()
-main = pure ()
+main = exportScript "BrowserPlutarch" $ compile mempty successor

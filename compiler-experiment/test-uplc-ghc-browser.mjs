@@ -117,9 +117,9 @@ const compiledOutputs = await compile(
     "-fno-unbox-small-strict-fields",
     "-fno-unbox-strict-fields",
     "-fprefer-byte-code",
+    "-fno-unoptimized-core-for-interpreter",
     "-fwrite-interface",
     "-fforce-recomp",
-    "-fno-code",
   ].join(" "),
   project,
 );
