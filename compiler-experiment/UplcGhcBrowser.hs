@@ -151,7 +151,7 @@ compileMainModule libdir args hasSupportModules = do
     initial <- getSessionDynFlags
     logger <- getLogger
     let packageArgs =
-          [flag | hasSupportModules, flag <- ["-dynamic", "-package=" <> userPackageId]]
+          "-dynamic" : ["-package=" <> userPackageId | hasSupportModules]
     (parsedFlags, leftovers, warnings) <-
       parseDynamicFlags logger initial $ map noLoc $ args <> packageArgs
     when (not $ null leftovers) $
