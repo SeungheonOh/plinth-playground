@@ -12,6 +12,9 @@ import {
   ExternalLink,
   FileCode2,
   FilePlus2,
+  Files,
+  Folder,
+  FolderOpen,
   Hammer,
   Link,
   LoaderCircle,
@@ -247,6 +250,58 @@ function moduleNameToPath(moduleName: string) {
   return `${moduleName.replace(/\./g, '/')}.hs`;
 }
 
+type ProjectTreeDirectory = {
+  directories: Map<string, ProjectTreeDirectory>;
+  files: Array<{ label: string; path: string }>;
+};
+
+type ProjectTreeRow =
+  | { kind: 'directory'; depth: number; label: string; path: string; open: boolean }
+  | { kind: 'file'; depth: number; label: string; path: string };
+
+function buildProjectTreeRows(modules: SourceModule[], collapsedFolders: Set<string>): ProjectTreeRow[] {
+  const root: ProjectTreeDirectory = { directories: new Map(), files: [] };
+
+  for (const sourceModule of modules) {
+    const parts = sourceModule.name.split('/');
+    let directory = root;
+    for (const part of parts.slice(0, -1)) {
+      let child = directory.directories.get(part);
+      if (!child) {
+        child = { directories: new Map(), files: [] };
+        directory.directories.set(part, child);
+      }
+      directory = child;
+    }
+    directory.files.push({ label: parts.at(-1) ?? sourceModule.name, path: sourceModule.name });
+  }
+
+  const rows: ProjectTreeRow[] = [];
+  const appendDirectory = (directory: ProjectTreeDirectory, parentPath: string, depth: number) => {
+    const files = [...directory.files].sort((left, right) => {
+      if (left.path === 'Main.hs') return -1;
+      if (right.path === 'Main.hs') return 1;
+      return left.label.localeCompare(right.label);
+    });
+    const directories = [...directory.directories.entries()].sort(([left], [right]) => left.localeCompare(right));
+    const main = depth === 0 ? files.find((file) => file.path === 'Main.hs') : undefined;
+
+    if (main) rows.push({ kind: 'file', depth, ...main });
+    for (const [label, child] of directories) {
+      const path = parentPath ? `${parentPath}/${label}` : label;
+      const open = !collapsedFolders.has(path);
+      rows.push({ kind: 'directory', depth, label, path, open });
+      if (open) appendDirectory(child, path, depth + 1);
+    }
+    for (const file of files) {
+      if (file !== main) rows.push({ kind: 'file', depth, ...file });
+    }
+  };
+
+  appendDirectory(root, '', 0);
+  return rows;
+}
+
 async function copyText(value: string) {
   try {
     await navigator.clipboard.writeText(value);
@@ -276,6 +331,7 @@ export default function Home() {
   const [moduleDraft, setModuleDraft] = useState('');
   const [moduleDraftError, setModuleDraftError] = useState('');
   const [isAddingModule, setIsAddingModule] = useState(false);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [selectedExample, setSelectedExample] = useState(examples[0].id);
   const [compiler, setCompiler] = useState<BrowserCompiler | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState>('loading');
@@ -302,6 +358,10 @@ export default function Home() {
   const currentModule = modules.find((sourceModule) => sourceModule.name === activeModule) ?? modules[0];
   const source = currentModule?.source ?? '';
   const lineCount = useMemo(() => source.split('\n').length, [source]);
+  const projectTreeRows = useMemo(
+    () => buildProjectTreeRows(modules, collapsedFolders),
+    [collapsedFolders, modules],
+  );
   const program = result?.programs[activeProgram] ?? null;
   const isBusy = runtimeState === 'loading' || runtimeState === 'compiling' || runtimeState === 'evaluating';
 
@@ -316,6 +376,7 @@ export default function Home() {
           if (request !== currentRequest) return;
           setModules(cloneModules(project.modules));
           setActiveModule(project.active);
+          setCollapsedFolders(new Set());
           setArguments(cloneArguments(project.arguments));
           setSelectedExample('');
           setResult(null);
@@ -363,6 +424,17 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAddingModule) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsAddingModule(false);
+      setModuleDraftError('');
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isAddingModule]);
 
   const compile = useCallback(async () => {
     if (!compiler || runtimeState !== 'ready') return;
@@ -440,6 +512,7 @@ export default function Home() {
     setSelectedExample(next.id);
     setModules(modulesForExample(next));
     setActiveModule('Main.hs');
+    setCollapsedFolders(new Set());
     setIsAddingModule(false);
     setModuleDraft('');
     setModuleDraftError('');
@@ -472,6 +545,12 @@ export default function Home() {
     setIsAddingModule(true);
   };
 
+  const closeModuleCreator = () => {
+    setIsAddingModule(false);
+    setModuleDraft('');
+    setModuleDraftError('');
+  };
+
   const addModule = (event: ReactFormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const moduleName = moduleDraft.trim().replace(/\.hs$/, '').replace(/\//g, '.');
@@ -493,6 +572,14 @@ export default function Home() {
       { name: path, source: `module ${moduleName} where\n\n` },
     ]);
     setActiveModule(path);
+    setCollapsedFolders((current) => {
+      const next = new Set(current);
+      const parts = path.split('/').slice(0, -1);
+      for (let index = 1; index <= parts.length; index += 1) {
+        next.delete(parts.slice(0, index).join('/'));
+      }
+      return next;
+    });
     setSelectedExample('');
     setIsAddingModule(false);
     setModuleDraft('');
@@ -702,42 +789,9 @@ export default function Home() {
       <section ref={workspaceRef} className="workspace" style={workspaceStyle} aria-label="Plinth compiler workspace">
         <section className="source-pane">
           <header className="pane-toolbar source-toolbar">
-            <div className="source-tabs" role="tablist" aria-label="Project modules">
-              {modules.map((sourceModule) => (
-                <div className="module-tab" data-active={activeModule === sourceModule.name} key={sourceModule.name}>
-                  <button
-                    aria-selected={activeModule === sourceModule.name}
-                    className="module-tab-select"
-                    onClick={() => setActiveModule(sourceModule.name)}
-                    role="tab"
-                    title={sourceModule.name}
-                    type="button"
-                  >
-                    <FileCode2 size={13} />
-                    <span>{sourceModule.name}</span>
-                  </button>
-                  {sourceModule.name !== 'Main.hs' ? (
-                    <button
-                      aria-label={`Delete ${sourceModule.name}`}
-                      className="module-tab-close"
-                      onClick={() => removeModule(sourceModule.name)}
-                      title={`Delete ${sourceModule.name}`}
-                      type="button"
-                    >
-                      <X size={11} />
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-              <button
-                aria-label="Add a Haskell module"
-                className="add-module-tab"
-                onClick={openModuleCreator}
-                title="Add module"
-                type="button"
-              >
-                <FilePlus2 size={13} />
-              </button>
+            <div className="active-file-title" title={activeModule}>
+              <FileCode2 size={14} />
+              <span>{activeModule}</span>
             </div>
             <label className="example-picker">
               <span>Example</span>
@@ -751,54 +805,92 @@ export default function Home() {
             </label>
           </header>
 
-          {isAddingModule ? (
-            <form className="module-creator" onSubmit={addModule}>
-              <span className="module-creator-icon"><FilePlus2 size={14} /></span>
-              <label>
-                <span>New module</span>
-                <input
-                  autoFocus
-                  onChange={(event) => {
-                    setModuleDraft(event.target.value);
-                    setModuleDraftError('');
-                  }}
-                  placeholder="Utils or Validators.Math"
-                  spellCheck={false}
-                  value={moduleDraft}
-                />
-              </label>
-              <span className="module-creator-path">
-                {moduleDraft.trim() ? moduleNameToPath(moduleDraft.trim().replace(/\.hs$/, '').replace(/\//g, '.')) : 'Module.hs'}
-              </span>
-              <button className="module-create-button" type="submit">Create</button>
-              <button
-                aria-label="Cancel adding module"
-                className="module-cancel-button"
-                onClick={() => {
-                  setIsAddingModule(false);
-                  setModuleDraftError('');
-                }}
-                type="button"
-              >
-                <X size={13} />
-              </button>
-              {moduleDraftError ? <small role="alert">{moduleDraftError}</small> : null}
-            </form>
-          ) : null}
-
-          <div className="editor-area">
-            <CodeMirror
-              aria-label={`${activeModule} Haskell source`}
-              basicSetup
-              className="source-editor"
-              extensions={[haskellLanguage, syntaxHighlighting(haskellHighlighting)]}
-              height="100%"
-              key={activeModule}
-              onChange={changeSource}
-              placeholder="Write a Plinth module…"
-              theme="light"
-              value={source}
-            />
+          <div className="source-workspace">
+            <aside className="project-tree" aria-label="Project files">
+              <header className="project-tree-heading">
+                <span><Files size={13} /> Project <small>{modules.length}</small></span>
+                <button
+                  aria-label="Add a Haskell module"
+                  onClick={openModuleCreator}
+                  title="Add module"
+                  type="button"
+                >
+                  <FilePlus2 size={13} />
+                </button>
+              </header>
+              <div className="project-tree-items" role="tree">
+                {projectTreeRows.map((row) => {
+                  const indentation = { '--tree-indent': `${row.depth * 13}px` } as CSSProperties;
+                  if (row.kind === 'directory') {
+                    return (
+                      <button
+                        aria-expanded={row.open}
+                        aria-level={row.depth + 1}
+                        aria-selected={false}
+                        className="project-tree-folder"
+                        key={`directory:${row.path}`}
+                        onClick={() => setCollapsedFolders((current) => {
+                          const next = new Set(current);
+                          if (next.has(row.path)) next.delete(row.path);
+                          else next.add(row.path);
+                          return next;
+                        })}
+                        role="treeitem"
+                        style={indentation}
+                        title={row.path}
+                        type="button"
+                      >
+                        <ChevronDown className="project-tree-chevron" data-open={row.open} size={11} />
+                        {row.open ? <FolderOpen size={13} /> : <Folder size={13} />}
+                        <span>{row.label}</span>
+                      </button>
+                    );
+                  }
+                  return (
+                    <div className="project-tree-file" data-active={activeModule === row.path} key={`file:${row.path}`}>
+                      <button
+                        aria-level={row.depth + 1}
+                        aria-selected={activeModule === row.path}
+                        className="project-tree-file-select"
+                        onClick={() => setActiveModule(row.path)}
+                        role="treeitem"
+                        style={indentation}
+                        title={row.path}
+                        type="button"
+                      >
+                        <FileCode2 size={13} />
+                        <span>{row.label}</span>
+                      </button>
+                      {row.path !== 'Main.hs' ? (
+                        <button
+                          aria-label={`Delete ${row.path}`}
+                          className="project-tree-file-delete"
+                          onClick={() => removeModule(row.path)}
+                          title={`Delete ${row.path}`}
+                          type="button"
+                        >
+                          <X size={11} />
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </aside>
+            <div className="editor-area">
+              <CodeMirror
+                aria-label={`${activeModule} Haskell source`}
+                basicSetup
+                className="source-editor"
+                extensions={[haskellLanguage, syntaxHighlighting(haskellHighlighting)]}
+                height="100%"
+                key={activeModule}
+                onChange={changeSource}
+                placeholder="Write a Plinth module…"
+                theme="light"
+                value={source}
+              />
+            </div>
           </div>
 
           <footer className="pane-status">
@@ -986,6 +1078,63 @@ export default function Home() {
           </footer>
         </section>
       </section>
+
+      {isAddingModule ? (
+        <div className="module-modal-layer">
+          <button
+            aria-label="Cancel adding module"
+            className="module-modal-backdrop"
+            onClick={closeModuleCreator}
+            tabIndex={-1}
+            type="button"
+          />
+          <form
+            aria-labelledby="module-dialog-title"
+            aria-modal="true"
+            className="module-dialog"
+            onSubmit={addModule}
+            role="dialog"
+          >
+            <header className="module-dialog-header">
+              <span className="module-dialog-icon"><FilePlus2 size={16} /></span>
+              <span>
+                <strong id="module-dialog-title">Create new module</strong>
+                <small>Add another Haskell source file to this project</small>
+              </span>
+              <button aria-label="Close module dialog" onClick={closeModuleCreator} type="button">
+                <X size={14} />
+              </button>
+            </header>
+
+            <label className="module-dialog-field">
+              <span>Module name</span>
+              <input
+                autoFocus
+                onChange={(event) => {
+                  setModuleDraft(event.target.value);
+                  setModuleDraftError('');
+                }}
+                placeholder="Utils or Validators.Math"
+                spellCheck={false}
+                value={moduleDraft}
+              />
+              <small>Use a capitalized Haskell module name. Dots create folders.</small>
+            </label>
+
+            <div className="module-path-preview">
+              <span>File path</span>
+              <code>{moduleDraft.trim() ? moduleNameToPath(moduleDraft.trim().replace(/\.hs$/, '').replace(/\//g, '.')) : 'Module.hs'}</code>
+            </div>
+
+            {moduleDraftError ? <div className="module-dialog-error" role="alert">{moduleDraftError}</div> : null}
+
+            <footer className="module-dialog-actions">
+              <button className="module-dialog-cancel" onClick={closeModuleCreator} type="button">Cancel</button>
+              <button className="module-create-button" type="submit"><FilePlus2 size={13} /> Create module</button>
+            </footer>
+          </form>
+        </div>
+      ) : null}
 
       <footer className="app-statusbar">
         <span>Plinth 1.66</span>
