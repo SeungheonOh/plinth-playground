@@ -1,0 +1,53 @@
+diff --git a/ghc/Main.hs b/ghc/Main.hs
+index 5f17f24c..40d2fb52 100644
+--- a/ghc/Main.hs
++++ b/ghc/Main.hs
+@@ -101,6 +101,11 @@ import Data.Bifunctor
+ import GHC.Data.Graph.Directed
+ import qualified Data.List.NonEmpty as NE
+ 
++#if defined(PLINTH)
++import qualified Plinth.Plugin
++import GHC.Driver.Monad (modifySession)
++#endif
++
+ -----------------------------------------------------------------------------
+ -- ToDo:
+ 
+@@ -195,6 +200,10 @@ main' postLoadMode units dflags0 args flagWarnings = do
+                                          DoRun    -> 0
+                                          _other   -> 1
+                         }
++#if defined(PLINTH)
++                            `gopt_set` Opt_WriteIfSimplifiedCore
++                            `gopt_set` Opt_PluginTrustworthy
++#endif
+ 
+       -- turn on -fimplicit-import-qualified for GHCi now, so that it
+       -- can be overridden from the command-line
+@@ -282,6 +291,25 @@ main' postLoadMode units dflags0 args flagWarnings = do
+   -- Must do this before loading plugins
+   liftIO $ initUniqSupply (initialUnique dflags6) (uniqueIncrement dflags6)
+ 
++#if defined(PLINTH)
++  let plinthPluginModuleName = mkModuleName "Plinth.Plugin"
++      plinthPluginArgs =
++        [ opt
++        | (moduleName, opt) <- pluginModNameOpts dflags6
++        , moduleName == plinthPluginModuleName
++        ]
++      plinthStaticPlugin =
++        StaticPlugin
++          (PluginWithArgs Plinth.Plugin.plugin plinthPluginArgs)
++          False
++
++  modifySession $ \hscEnv ->
++    let oldPlugins = hsc_plugins hscEnv
++    in hscEnv
++         { hsc_plugins = oldPlugins { staticPlugins = [plinthStaticPlugin] }
++         }
++#endif
++
+   -- Initialise plugins here because the plugin author might already expect this
+   -- subsequent call to `getLogger` to be affected by a plugin.
+   initializeSessionPlugins

@@ -14,6 +14,8 @@ import Data.Version (Version (Version))
 import Data.Word (Word8)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteString.Char8
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Text.Encoding
 import GHC
 import GHC.Data.ShortText qualified as ShortText
 import GHC.Driver.Backend (interpreterBackend)
@@ -69,6 +71,23 @@ newtype JSFunction a = JSFunction JSVal
 
 type CompileFunction = JSString -> JSString -> IO JSString
 
+-- JS strings are explicitly released below. Fully force all converted input
+-- first: project parsing is intentionally lazy, so evaluating only the outer
+-- list constructor can otherwise leave a later module referring to freed JS
+-- memory.
+forceString :: String -> ()
+forceString [] = ()
+forceString (character : rest) = character `seq` forceString rest
+
+forceStrings :: [String] -> ()
+forceStrings [] = ()
+forceStrings (value : rest) = forceString value `seq` forceStrings rest
+
+forceProject :: [(FilePath, String)] -> ()
+forceProject [] = ()
+forceProject ((path, source) : rest) =
+  forceString path `seq` forceString source `seq` forceProject rest
+
 -- | Create one reusable, fully client-side uplc-ghc session. The returned
 -- JavaScript async function accepts GHC flags and a NUL-delimited project.
 uplcGhcBrowser :: JSString -> JSString -> IO (JSFunction CompileFunction)
@@ -76,6 +95,7 @@ uplcGhcBrowser jsLibdir jsPackagePath =
   defaultErrorHandler defaultFatalMessager defaultFlushOut $ do
     libdir <- evaluate $ fromJSString jsLibdir
     packagePath <- evaluate $ fromJSString jsPackagePath
+    _ <- evaluate $ forceString libdir `seq` forceString packagePath
     freeJSVal $ coerce jsLibdir
     freeJSVal $ coerce jsPackagePath
     setEnv "GHC_PACKAGE_PATH" packagePath
@@ -84,9 +104,10 @@ uplcGhcBrowser jsLibdir jsPackagePath =
       defaultErrorHandler defaultFatalMessager defaultFlushOut $ do
         args <- evaluate $ words $ fromJSString jsArgs
         project <- evaluate $ fromJSString jsProject
+        modules <- evaluate $ parseProject project
+        _ <- evaluate $ forceStrings args `seq` forceProject modules
         freeJSVal $ coerce jsArgs
         freeJSVal $ coerce jsProject
-        modules <- evaluate $ parseProject project
         removePreviousOutputs
         writeProject projectFiles modules
         let supportModules = filter ((/= "Main.hs") . fst) modules
@@ -301,15 +322,17 @@ splitSlash value =
 writeProject :: IORef [FilePath] -> [(FilePath, String)] -> IO ()
 writeProject projectFiles modules = do
   previousFiles <- readIORef projectFiles
-  forM_ previousFiles $ \path -> do
+  let currentFiles =
+        concatMap (projectArtifacts . (projectRoot </>) . fst) modules
+  forM_ (previousFiles <> currentFiles) $ \path -> do
     exists <- doesFileExist path
     when exists $ removeFile path
   createDirectoryIfMissing True projectRoot
   forM_ modules $ \(path, source) -> do
     let destination = projectRoot </> path
     createDirectoryIfMissing True $ takeDirectory destination
-    writeFile destination source
-  writeIORef projectFiles $ concatMap (projectArtifacts . (projectRoot </>) . fst) modules
+    ByteString.writeFile destination $ Text.Encoding.encodeUtf8 $ Text.pack source
+  writeIORef projectFiles currentFiles
 
 projectArtifacts :: FilePath -> [FilePath]
 projectArtifacts path =

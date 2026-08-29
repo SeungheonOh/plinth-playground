@@ -1,0 +1,12 @@
+diff --git a/crypton.cabal b/crypton.cabal
+--- a/crypton.cabal
++++ b/crypton.cabal
+@@ -206,6 +206,8 @@ library
+         Crypto.Tutorial
+ 
+     cc-options:       -std=gnu99
++    if os(wasi)
++        cc-options:   -DARGON2_NO_THREADS
+     c-sources:
+         cbits/argon2/argon2.c
+         cbits/crypton_blake2b.c

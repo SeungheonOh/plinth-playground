@@ -37,8 +37,34 @@ next-env.d.ts
 /outputs/
 /work/
 
-# local compiler build tree; the browser runtime is published from /public/runtime
-/compiler-experiment/
+# Compiler sources and reproducible build inputs are tracked. Large dependency
+# checkouts, Cabal output, and generated WASM products remain ignored.
+/compiler-experiment/*
+!/compiler-experiment/README.md
+!/compiler-experiment/UplcGhcBrowser.hs
+!/compiler-experiment/DecodeUplc.hs
+!/compiler-experiment/BrowserPlinth.hs
+!/compiler-experiment/BrowserPlinthWithUtils.hs
+!/compiler-experiment/BrowserPlinthMulti.hs
+!/compiler-experiment/BrowserLocalMath.hs
+!/compiler-experiment/empty-wasi-shim.c
+!/compiler-experiment/build-uplc-ghc-wasm.sh
+!/compiler-experiment/build-browser-rootfs.sh
+!/compiler-experiment/test-uplc-ghc-browser.sh
+!/compiler-experiment/test-uplc-ghc-browser.mjs
+!/compiler-experiment/split-rootfs.mjs
+!/compiler-experiment/cabal-9.12.project
+!/compiler-experiment/browser-modules/
+/compiler-experiment/browser-modules/*
+!/compiler-experiment/browser-modules/Utils.hs
+!/compiler-experiment/browser-modules/plinth-browser-utils.cabal
+!/compiler-experiment/uplc-ghc-wasm-9.12/
+/compiler-experiment/uplc-ghc-wasm-9.12/*
+!/compiler-experiment/uplc-ghc-wasm-9.12/uplc-ghc-wasm-port.cabal
+!/compiler-experiment/patches/
+!/compiler-experiment/patches/**
+!/compiler-experiment/scripts/
+!/compiler-experiment/scripts/**
 tsconfig.tsbuildinfo
 
 # The split browser compiler image under /public/runtime is tracked so

@@ -1,0 +1,16 @@
+diff --git a/ram.cabal b/ram.cabal
+index 9464e1f..9ff60d3 100644
+--- a/ram.cabal
++++ b/ram.cabal
+@@ -80,6 +80,11 @@ library
+   if (arch(i386) || arch(x86_64))
+     cpp-options: -DARCH_IS_LITTLE_ENDIAN
+ 
++  if os(wasi)
++    cpp-options: -DARCH_IS_LITTLE_ENDIAN
++    cc-options: -D_WASI_EMULATED_MMAN
++    extra-libraries: wasi-emulated-mman
++
+   if os(windows)
+     other-modules: Data.Memory.MemMap.Windows
+ 

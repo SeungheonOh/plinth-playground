@@ -12,7 +12,8 @@ Projects can contain multiple Haskell modules. Add modules from the file-tab
 bar using names such as `Utils` or `Validators.Math`; the compiler builds them
 inside WASM and makes them available to `Main.hs` through ordinary Haskell
 imports. Functions used across module boundaries by compiled Plinth code must
-be marked `INLINABLE`, as they would in a normal packaged Plinth library.
+have an exported unfolding. GHC usually exports small optimized functions;
+mark larger Plinth helpers `INLINABLE`, as in a normal packaged library.
 
 The Share button compresses every module and the current CEK arguments into the
 URL fragment. Opening that URL restores the complete project without uploading
@@ -34,6 +35,23 @@ The first browser load downloads roughly 140 MB of compiler files from
 `public/runtime`. The 10 MB CEK evaluator is loaded lazily on the first run.
 Compiler files are split into chunks small enough for normal Git and Cloudflare
 asset uploads.
+
+## Rebuilding the compiler from source
+
+The repository includes pinned source revisions, WASI compatibility patches,
+bootstrap scripts, compiler acceptance tests, and browser-filesystem packaging.
+To recreate `uplc-ghc`, the browser reactor, Flat decoder, CEK evaluator, and
+the complete website from a clean checkout, see
+[Building the browser Plinth compiler from source](docs/BUILDING_FROM_SOURCE.md).
+
+The complete entry point is:
+
+```sh
+HAPPY="$(command -v happy)" ./scripts/build-from-source.sh
+```
+
+Ordinary UI development does not require this expensive source build because
+the generated runtime under `public/runtime` is checked in.
 
 ## Cloudflare deployment
 

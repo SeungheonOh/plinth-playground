@@ -16,16 +16,15 @@ import type {
   OutputKind,
 } from './compiler-runtime';
 
-const GHC_VERSION = '9.12.4.20260731';
-const GHC_PREFIX = '/home/sho/fun/ghc-wasm-toolchain-9.12';
-const LIBDIR = `${GHC_PREFIX}/wasm32-wasi-ghc/lib`;
-const STORE_PACKAGE_DB =
-  `${GHC_PREFIX}/.cabal/store/ghc-${GHC_VERSION}-inplace/package.db`;
-const PROJECT_PACKAGE_DB =
-  '/home/sho/fun/ghc-plinth-wasm-playground/compiler-experiment/' +
-  `dist-uplc-ghc-wasm-9.12/packagedb/ghc-${GHC_VERSION}`;
 const RUNTIME = '/runtime';
 const CEK_RUNTIME_VERSION = 'plinth-1.66-bounded-v1';
+const LEGACY_COMPILER_PATHS = {
+  ghcPrefix: '/home/sho/fun/ghc-wasm-toolchain-9.12',
+  ghcVersion: '9.12.4.20260731',
+  projectPackageDb:
+    '/home/sho/fun/ghc-plinth-wasm-playground/compiler-experiment/' +
+    'dist-uplc-ghc-wasm-9.12/packagedb/ghc-9.12.4.20260731',
+};
 
 const PLINTH_FLAGS = [
   '-package=plutus-tx',
@@ -56,6 +55,11 @@ type RuntimeManifest = {
   version?: string;
   totalSize: number;
   parts: Array<{ file: string; size: number }>;
+  compiler?: {
+    ghcPrefix: string;
+    ghcVersion: string;
+    projectPackageDb: string;
+  };
 };
 
 type DynamicLinkerModule = {
@@ -151,7 +155,11 @@ async function fetchRuntimeArchive() {
     archive.set(part, offset);
     offset += part.byteLength;
   }
-  return { archive, format: manifest.format };
+  return {
+    archive,
+    format: manifest.format,
+    compiler: manifest.compiler ?? LEGACY_COMPILER_PATHS,
+  };
 }
 
 const tarTextDecoder = new TextDecoder();
@@ -456,9 +464,13 @@ async function initialize() {
     isIserv: false,
   });
 
+  const { ghcPrefix, ghcVersion, projectPackageDb } = runtimeArchive.compiler;
+  const libdir = `${ghcPrefix}/wasm32-wasi-ghc/lib`;
+  const storePackageDb =
+    `${ghcPrefix}/.cabal/store/ghc-${ghcVersion}-inplace/package.db`;
   compileFunction = await dynamicLinker.exportFuncs.uplcGhcBrowser(
-    LIBDIR,
-    `${STORE_PACKAGE_DB}:${PROJECT_PACKAGE_DB}:`,
+    libdir,
+    `${storePackageDb}:${projectPackageDb}:`,
   );
   postProgress(100, 'Plinth compiler ready');
   self.postMessage({ type: 'ready' });

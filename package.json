@@ -10,6 +10,9 @@
     "build": "vinext build",
     "start": "vinext start",
     "preview": "vite preview",
+    "compiler:bootstrap": "compiler-experiment/scripts/bootstrap-compiler.sh",
+    "compiler:build": "compiler-experiment/build-uplc-ghc-wasm.sh && compiler-experiment/build-browser-rootfs.sh",
+    "build:from-source": "scripts/build-from-source.sh",
     "deploy": "npm run build && wrangler deploy",
     "cf-typegen": "wrangler types",
     "lint": "eslint app --ignore-pattern dist --ignore-pattern .next"

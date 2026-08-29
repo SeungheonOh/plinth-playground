@@ -1,0 +1,20 @@
+diff --git a/sodium-clib.cabal b/sodium-clib.cabal
+index b3ab51ae..68b8ef14 100644
+--- a/sodium-clib.cabal
++++ b/sodium-clib.cabal
+@@ -1,6 +1,6 @@
+ cabal-version: 3.0
+ name:          sodium-clib
+-version:       1.0.20
++version:       1.0.20.0
+ synopsis:      Sodium is an easy-to-use software library that provides a wide range of cryptographic operations including encryption, decryption, digital signatures, and secure password hashing.
+ description:   libsodium. See [libsodium](https://github.com/jedisct1/libsodium)
+ category:      Cryptography
+@@ -177,7 +177,6 @@ library
+         -DHAVE_GETENTROPY=1
+         -DHAVE_NANOSLEEP=1
+         -DHAVE_POSIX_MEMALIGN=1
+-        -DHAVE_SYS_AUXV_H=1
+         -DHAVE_SYS_PARAM_H=1
+         -DHAVE_SYS_RANDOM_H=1
+ 

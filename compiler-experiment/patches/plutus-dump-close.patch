@@ -1,0 +1,21 @@
+diff --git a/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs b/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs
+index ec8685e..8f837ce 100644
+--- a/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs
++++ b/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs
+@@ -102,7 +102,7 @@ import Language.Haskell.TH.Syntax as TH hiding (lift)
+ import Prettyprinter qualified as PP
+ import System.Directory (createDirectoryIfMissing, makeAbsolute)
+ import System.FilePath ((</>))
+-import System.IO (hPutStrLn, openBinaryTempFile, stderr)
++import System.IO (hClose, hPutStrLn, openBinaryTempFile, stderr)
+ import System.IO.Unsafe (unsafePerformIO)
+ import System.Random (randomRIO)
+ import Text.Regex.TDFA ((=~))
+@@ -901,6 +901,7 @@ runCompiler packageName moduleName opts expr = do
+       (tPath, tHandle) <- openBinaryTempFile "." fileName
+       putStrLn $ "!!! dumping " ++ desc ++ " to " ++ show tPath
+       BS.hPut tHandle $ flat t
++      hClose tHandle
+ 
+     getSrcSpans :: PIR.Provenance Ann -> SrcSpans
+     getSrcSpans = SrcSpans . Set.unions . fmap (unSrcSpans . annSrcSpans) . toList

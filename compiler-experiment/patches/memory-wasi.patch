@@ -1,0 +1,73 @@
+diff --git a/Data/Memory/Internal/CompatPrim64.hs b/Data/Memory/Internal/CompatPrim64.hs
+--- a/Data/Memory/Internal/CompatPrim64.hs
++++ b/Data/Memory/Internal/CompatPrim64.hs
+@@ -150,8 +150,12 @@ w64# w _ _ = w
+ w64# w _ _ = w
+ 
+ #elif WORD_SIZE_IN_BITS == 32
++#if MIN_VERSION_base(4,16,0)
++import GHC.Prim hiding (timesWord64#)
++#else
+ import GHC.IntWord64
+ import GHC.Prim (Word#)
++#endif
+ 
+ timesWord64# :: Word64# -> Word64# -> Word64#
+ timesWord64# a b =
+diff --git a/Data/Memory/PtrMethods.hs b/Data/Memory/PtrMethods.hs
+--- a/Data/Memory/PtrMethods.hs
++++ b/Data/Memory/PtrMethods.hs
+@@ -63,7 +63,7 @@ memConstEqual p1 p2 n = loop 0 0
+ 
+ -- | Copy a set number of bytes from @src to @dst
+ memCopy :: Ptr Word8 -> Ptr Word8 -> Int -> IO ()
+-memCopy dst src n = c_memcpy dst src (fromIntegral n)
++memCopy dst src n = c_memcpy dst src (fromIntegral n) >>= \_ -> return ()
+ {-# INLINE memCopy #-}
+ 
+ -- | Set @n number of bytes to the same value @v
+@@ -114,7 +114,7 @@ memConstEqual p1 p2 n = loop 0 0
+             loop (i+1) (acc .|. e)
+ 
+ foreign import ccall unsafe "memset"
+-    c_memset :: Ptr Word8 -> Word8 -> CSize -> IO ()
++    c_memset :: Ptr Word8 -> Word8 -> CSize -> IO (Ptr Word8)
+ 
+ foreign import ccall unsafe "memcpy"
+-    c_memcpy :: Ptr Word8 -> Ptr Word8 -> CSize -> IO ()
++    c_memcpy :: Ptr Word8 -> Ptr Word8 -> CSize -> IO (Ptr Word8)
+diff --git a/memory.cabal b/memory.cabal
+--- a/memory.cabal
++++ b/memory.cabal
+@@ -1,6 +1,5 @@
+ Name:                memory
+ version:             0.18.0
+-x-revision:          1
+ Synopsis:            memory and related abstraction stuff
+ Description:
+     Chunk of memory, polymorphic byte array management and manipulation
+@@ -70,18 +69,20 @@ Library
+                      Data.ByteArray.Methods
+                      Data.ByteArray.MemView
+                      Data.ByteArray.View
+-
+   if impl(ghc < 8.8)
+-    -- https://github.com/haskell-infra/hackage-trustees/issues/422
+-    build-depends:   base >= 4.13
++    buildable: False
+   else
+-    build-depends:   base >= 4.13
++    build-depends:   base
+                    , ghc-prim
+   -- FIXME armel or mispel is also little endian.
+   -- might be a good idea to also add a runtime autodetect mode.
+   -- ARCH_ENDIAN_UNKNOWN
+   if (arch(i386) || arch(x86_64))
+     CPP-options:     -DARCH_IS_LITTLE_ENDIAN
++  if os(wasi)
++    CPP-options:     -DARCH_IS_LITTLE_ENDIAN
++    CC-options:      -D_WASI_EMULATED_MMAN
++    extra-libraries: wasi-emulated-mman
+   if os(windows)
+     Other-modules:   Data.Memory.MemMap.Windows
+   else
