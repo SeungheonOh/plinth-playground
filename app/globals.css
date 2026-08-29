@@ -157,6 +157,51 @@ input:disabled {
   gap: 7px;
 }
 
+.share-notice {
+  align-items: center;
+  background: #173d32;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgb(21 43 35 / 18%);
+  color: white;
+  display: flex;
+  font-size: 8px;
+  gap: 7px;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 8px 8px 8px 10px;
+  position: fixed;
+  right: 12px;
+  top: 60px;
+  z-index: 20;
+}
+
+.share-notice[data-state='error'] {
+  background: #752f2f;
+}
+
+.share-notice > span {
+  line-height: 1.45;
+}
+
+.share-notice button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: currentColor;
+  display: flex;
+  flex: 0 0 22px;
+  height: 22px;
+  justify-content: center;
+  opacity: .72;
+  padding: 0;
+}
+
+.share-notice button:hover {
+  background: rgb(255 255 255 / 10%);
+  opacity: 1;
+}
+
 .compiler-state {
   color: var(--muted);
   font-family: var(--font-geist-mono), monospace;
@@ -277,8 +322,19 @@ kbd {
   align-self: stretch;
 }
 
-.source-tabs button,
-.result-tabs button {
+.source-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.source-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.result-tabs button,
+.module-tab-select {
   align-items: center;
   background: transparent;
   border: 0;
@@ -291,13 +347,12 @@ kbd {
   position: relative;
 }
 
-.source-tabs button.source-tab-active,
+.module-tab[data-active='true'] .module-tab-select,
 .result-tabs button[aria-selected='true'] {
   color: var(--foreground);
   font-weight: 650;
 }
 
-.source-tabs button.source-tab-active::after,
 .result-tabs button[aria-selected='true']::after {
   background: var(--primary);
   bottom: -1px;
@@ -309,8 +364,76 @@ kbd {
 }
 
 .result-tabs button:hover,
-.source-tabs button:hover {
+.module-tab-select:hover {
   color: var(--foreground);
+}
+
+.module-tab {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.module-tab[data-active='true']::after {
+  background: var(--primary);
+  bottom: -1px;
+  content: '';
+  height: 2px;
+  left: 9px;
+  position: absolute;
+  right: 9px;
+}
+
+.module-tab-select {
+  padding-right: 6px;
+}
+
+.module-tab:first-child .module-tab-select {
+  padding-right: 10px;
+}
+
+.module-tab-select span {
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-tab-close,
+.add-module-tab {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted-soft);
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 0;
+}
+
+.module-tab-close {
+  height: 22px;
+  margin-right: 5px;
+  width: 20px;
+}
+
+.add-module-tab {
+  align-self: center;
+  height: 27px;
+  margin: 0 4px 0 2px;
+  width: 27px;
+}
+
+.module-tab-close:hover {
+  background: var(--destructive-soft);
+  color: var(--destructive);
+}
+
+.add-module-tab:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
 .result-tabs small {
@@ -328,6 +451,7 @@ kbd {
 
 .example-picker {
   color: var(--muted);
+  flex: 0 0 auto;
   font-size: 7px;
   font-weight: 650;
   gap: 7px;
@@ -355,6 +479,113 @@ kbd {
   pointer-events: none;
   position: absolute;
   right: 7px;
+}
+
+.module-creator {
+  align-items: center;
+  background: #fcfdfc;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 7px;
+  grid-template-columns: 25px minmax(130px, 1fr) auto auto 27px;
+  padding: 7px 9px;
+}
+
+.module-creator-icon {
+  align-items: center;
+  background: var(--primary-soft);
+  border-radius: 6px;
+  color: var(--primary);
+  display: flex;
+  height: 25px;
+  justify-content: center;
+  width: 25px;
+}
+
+.module-creator label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.module-creator label > span {
+  color: var(--muted);
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.module-creator input {
+  background: white;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--foreground);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  height: 28px;
+  min-width: 0;
+  outline: 0;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.module-creator input:focus {
+  border-color: rgb(38 116 95 / 55%);
+  box-shadow: 0 0 0 2px rgb(38 116 95 / 10%);
+}
+
+.module-creator-path {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-create-button,
+.module-cancel-button {
+  align-items: center;
+  border-radius: 6px;
+  display: flex;
+  height: 28px;
+  justify-content: center;
+}
+
+.module-create-button {
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  color: white;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 0 9px;
+}
+
+.module-create-button:hover {
+  background: var(--primary-hover);
+}
+
+.module-cancel-button {
+  background: white;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 0;
+  width: 27px;
+}
+
+.module-cancel-button:hover {
+  background: var(--surface-hover);
+  color: var(--foreground);
+}
+
+.module-creator small {
+  color: var(--destructive);
+  font-size: 7px;
+  grid-column: 2 / -1;
 }
 
 .editor-area {
@@ -1014,6 +1245,14 @@ kbd {
 
   .output-actions button {
     padding-inline: 6px;
+  }
+
+  .module-creator {
+    grid-template-columns: 25px minmax(100px, 1fr) auto 27px;
+  }
+
+  .module-creator-path {
+    display: none;
   }
 
   .argument-row {

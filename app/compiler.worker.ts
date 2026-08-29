@@ -41,8 +41,11 @@ const PLINTH_FLAGS = [
   '-fno-strictness',
   '-fno-unbox-small-strict-fields',
   '-fno-unbox-strict-fields',
+  '-fprefer-byte-code',
+  '-fwrite-interface',
   '-fforce-recomp',
   '-fno-code',
+  '-i/tmp/plinth-project',
 ].join(' ');
 
 type CompileFunction = (args: string, source: string) => Promise<string>;
@@ -462,7 +465,7 @@ async function initialize() {
 }
 
 self.onmessage = async (event: MessageEvent<
-  | { type: 'compile'; requestId: number; source: string }
+  | { type: 'compile'; requestId: number; project: string }
   | { type: 'evaluate'; requestId: number; filename: string; args: CekArgument[] }
 >) => {
   const { requestId } = event.data;
@@ -480,8 +483,8 @@ self.onmessage = async (event: MessageEvent<
       return;
     }
 
-    const { source } = event.data;
-    const encodedOutputs = await compileFunction(PLINTH_FLAGS, source);
+    const { project } = event.data;
+    const encodedOutputs = await compileFunction(PLINTH_FLAGS, project);
     const programs: CompiledProgram[] = [];
     for (const record of encodedOutputs.trim().split('\n')) {
       const [filename, flatHex] = record.split('\t');

@@ -16,6 +16,11 @@ export type CompileResult = {
   programs: CompiledProgram[];
 };
 
+export type SourceModule = {
+  name: string;
+  source: string;
+};
+
 export type CekArgumentKind = 'integer' | 'bytes' | 'string' | 'bool' | 'unit' | 'data';
 
 export type CekArgument = {
@@ -36,9 +41,26 @@ export type CekEvaluationResult = {
 };
 
 export type BrowserCompiler = {
-  compile: (source: string, listener: OutputListener) => Promise<CompileResult>;
+  compile: (modules: SourceModule[], listener: OutputListener) => Promise<CompileResult>;
   evaluate: (filename: string, args: CekArgument[]) => Promise<CekEvaluationResult>;
 };
+
+const PROJECT_BUNDLE_MARKER = 'PLINTH_PROJECT_V1';
+
+function serializeProject(modules: SourceModule[]) {
+  if (modules.length === 0) throw new Error('The project has no Haskell modules');
+  if (!modules.some((sourceModule) => sourceModule.name === 'Main.hs')) {
+    throw new Error('The project needs a Main.hs entry module');
+  }
+  const fields = [PROJECT_BUNDLE_MARKER];
+  for (const sourceModule of modules) {
+    if (sourceModule.name.includes('\0') || sourceModule.source.includes('\0')) {
+      throw new Error('Module names and source cannot contain NUL characters');
+    }
+    fields.push(sourceModule.name, sourceModule.source);
+  }
+  return fields.join('\0');
+}
 
 type WorkerEvent =
   | { type: 'progress'; progress: number; detail: string }
@@ -80,7 +102,7 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
       if (message.type === 'ready') {
         initialized = true;
         resolve({
-          compile(source, listener) {
+          compile(modules, listener) {
             const requestId = nextRequestId++;
             return new Promise<CompileResult>((resolveCompile, rejectCompile) => {
               pending.set(requestId, {
@@ -88,7 +110,11 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
                 resolve: resolveCompile,
                 reject: rejectCompile,
               });
-              worker.postMessage({ type: 'compile', requestId, source });
+              worker.postMessage({
+                type: 'compile',
+                requestId,
+                project: serializeProject(modules),
+              });
             });
           },
           evaluate(filename, args) {

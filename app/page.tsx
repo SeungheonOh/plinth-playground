@@ -11,15 +11,20 @@ import {
   Download,
   ExternalLink,
   FileCode2,
+  FilePlus2,
   Hammer,
+  Link,
   LoaderCircle,
   Play,
   Plus,
+  Share2,
   Terminal,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   type CSSProperties,
+  type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -34,8 +39,36 @@ import {
   type CekArgumentKind,
   type CekEvaluationResult,
   type CompileResult,
+  type SourceModule,
   loadBrowserCompiler,
 } from './compiler-runtime';
+import { decodeSharedProject, encodeSharedProject } from './project-share';
+
+const multiModuleMain = `{-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE TemplateHaskell #-}
+module Main where
+
+import LocalMath qualified
+import PlutusTx.Code (CompiledCode)
+import PlutusTx.TH qualified as PlutusTx
+
+addTwo :: Integer -> Integer
+addTwo = LocalMath.addTwo
+
+addTwoScript :: CompiledCode (Integer -> Integer)
+addTwoScript = $$(PlutusTx.compile [|| addTwo ||])
+
+main :: IO ()
+main = pure ()`;
+
+const multiModuleHelper = `{-# LANGUAGE NoImplicitPrelude #-}
+module LocalMath (addTwo) where
+
+import PlutusTx.Prelude
+
+{-# INLINABLE addTwo #-}
+addTwo :: Integer -> Integer
+addTwo value = value + 2`;
 
 const examples = [
   {
@@ -79,6 +112,16 @@ compiledAddOne = $$(PlutusTx.compile [|| addOne ||])
 
 main :: IO ()
 main = pure ()`,
+  },
+  {
+    id: 'modules',
+    label: 'Multiple modules',
+    args: [{ kind: 'integer', value: '40' }],
+    source: multiModuleMain,
+    modules: [
+      { name: 'Main.hs', source: multiModuleMain },
+      { name: 'LocalMath.hs', source: multiModuleHelper },
+    ],
   },
   {
     id: 'equality',
@@ -134,6 +177,7 @@ main = pure ()`,
   label: string;
   args: CekArgument[];
   source: string;
+  modules?: SourceModule[];
 }>;
 
 const argumentKinds: Array<{ kind: CekArgumentKind; label: string }> = [
@@ -177,8 +221,9 @@ const haskellHighlighting = HighlightStyle.define([
 
 type RuntimeState = 'loading' | 'ready' | 'compiling' | 'evaluating' | 'error';
 type OutputTab = 'uplc' | 'run' | 'flat' | 'diagnostics';
+type ShareState = 'idle' | 'copying' | 'copied' | 'error';
 
-const waitingMessage = `Compile Main.hs to inspect the Untyped Plutus Core emitted by Plinth.Plugin.
+const waitingMessage = `Compile the project to inspect the Untyped Plutus Core emitted by Plinth.Plugin.
 
 GHC, Plinth, and the CEK evaluator all run locally in this browser. The first visit downloads the compiler runtime; later visits use the browser cache.`;
 
@@ -190,13 +235,47 @@ function cloneArguments(args: CekArgument[]) {
   return args.map((argument) => ({ ...argument }));
 }
 
+function cloneModules(modules: SourceModule[]) {
+  return modules.map((sourceModule) => ({ ...sourceModule }));
+}
+
+function modulesForExample(example: (typeof examples)[number]) {
+  return cloneModules(example.modules ?? [{ name: 'Main.hs', source: example.source }]);
+}
+
+function moduleNameToPath(moduleName: string) {
+  return `${moduleName.replace(/\./g, '/')}.hs`;
+}
+
+async function copyText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    return copied;
+  }
+}
+
 function formatNumber(value: string) {
   const number = Number(value);
   return Number.isSafeInteger(number) ? number.toLocaleString() : value;
 }
 
 export default function Home() {
-  const [source, setSource] = useState(examples[0].source);
+  const [modules, setModules] = useState<SourceModule[]>(() => modulesForExample(examples[0]));
+  const [activeModule, setActiveModule] = useState('Main.hs');
+  const [moduleDraft, setModuleDraft] = useState('');
+  const [moduleDraftError, setModuleDraftError] = useState('');
+  const [isAddingModule, setIsAddingModule] = useState(false);
   const [selectedExample, setSelectedExample] = useState(examples[0].id);
   const [compiler, setCompiler] = useState<BrowserCompiler | null>(null);
   const [runtimeState, setRuntimeState] = useState<RuntimeState>('loading');
@@ -210,6 +289,8 @@ export default function Home() {
   const [evaluation, setEvaluation] = useState<CekEvaluationResult | null>(null);
   const [evaluationError, setEvaluationError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [shareState, setShareState] = useState<ShareState>('idle');
+  const [shareNotice, setShareNotice] = useState('');
   const [splitPosition, setSplitPosition] = useState(() => {
     if (typeof window === 'undefined') return 54;
     const saved = Number(window.localStorage.getItem('plinth-workspace-split'));
@@ -218,9 +299,47 @@ export default function Home() {
   const [isResizing, setIsResizing] = useState(false);
   const workspaceRef = useRef<HTMLElement>(null);
 
+  const currentModule = modules.find((sourceModule) => sourceModule.name === activeModule) ?? modules[0];
+  const source = currentModule?.source ?? '';
   const lineCount = useMemo(() => source.split('\n').length, [source]);
   const program = result?.programs[activeProgram] ?? null;
   const isBusy = runtimeState === 'loading' || runtimeState === 'compiling' || runtimeState === 'evaluating';
+
+  useEffect(() => {
+    let request = 0;
+    const restoreSharedProject = () => {
+      const currentRequest = ++request;
+      const payload = new URLSearchParams(window.location.hash.slice(1)).get('p');
+      if (!payload) return;
+      void decodeSharedProject(payload)
+        .then((project) => {
+          if (request !== currentRequest) return;
+          setModules(cloneModules(project.modules));
+          setActiveModule(project.active);
+          setArguments(cloneArguments(project.arguments));
+          setSelectedExample('');
+          setResult(null);
+          setEvaluation(null);
+          setEvaluationError('');
+          setDiagnostics([]);
+          setActiveTab('uplc');
+          setActiveProgram(0);
+          setShareState('idle');
+          setShareNotice(`Shared project loaded · ${project.modules.length} module${project.modules.length === 1 ? '' : 's'}`);
+        })
+        .catch((error: unknown) => {
+          if (request !== currentRequest) return;
+          setShareState('error');
+          setShareNotice(error instanceof Error ? error.message : 'Could not open this project link');
+        });
+    };
+    restoreSharedProject();
+    window.addEventListener('hashchange', restoreSharedProject);
+    return () => {
+      request += 1;
+      window.removeEventListener('hashchange', restoreSharedProject);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -258,7 +377,7 @@ export default function Home() {
 
     const lines: string[] = [];
     try {
-      const compiled = await compiler.compile(source, (_kind, message) => {
+      const compiled = await compiler.compile(modules, (_kind, message) => {
         lines.push(message);
         setDiagnostics([...lines]);
       });
@@ -278,7 +397,7 @@ export default function Home() {
     } finally {
       setRuntimeState('ready');
     }
-  }, [compiler, runtimeState, source]);
+  }, [compiler, modules, runtimeState]);
 
   const runEvaluation = useCallback(async () => {
     if (!compiler || !program || runtimeState !== 'ready') return;
@@ -319,7 +438,11 @@ export default function Home() {
   const selectExample = (id: string) => {
     const next = examples.find((example) => example.id === id) ?? examples[0];
     setSelectedExample(next.id);
-    setSource(next.source);
+    setModules(modulesForExample(next));
+    setActiveModule('Main.hs');
+    setIsAddingModule(false);
+    setModuleDraft('');
+    setModuleDraftError('');
     setArguments(cloneArguments(next.args));
     setResult(null);
     setEvaluation(null);
@@ -330,7 +453,9 @@ export default function Home() {
   };
 
   const changeSource = (value: string) => {
-    setSource(value);
+    setModules((current) => current.map((sourceModule) => (
+      sourceModule.name === activeModule ? { ...sourceModule, source: value } : sourceModule
+    )));
     setSelectedExample('');
     if (result) {
       setResult(null);
@@ -338,6 +463,83 @@ export default function Home() {
       setEvaluationError('');
       setDiagnostics([]);
       setActiveTab('uplc');
+    }
+  };
+
+  const openModuleCreator = () => {
+    setModuleDraft('');
+    setModuleDraftError('');
+    setIsAddingModule(true);
+  };
+
+  const addModule = (event: ReactFormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const moduleName = moduleDraft.trim().replace(/\.hs$/, '').replace(/\//g, '.');
+    if (!/^[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*$/.test(moduleName)) {
+      setModuleDraftError('Use a Haskell module name such as Utils or Validators.Math');
+      return;
+    }
+    if (moduleName === 'Main') {
+      setModuleDraftError('Main.hs already exists');
+      return;
+    }
+    const path = moduleNameToPath(moduleName);
+    if (modules.some((sourceModule) => sourceModule.name === path)) {
+      setModuleDraftError(`${path} already exists`);
+      return;
+    }
+    setModules((current) => [
+      ...current,
+      { name: path, source: `module ${moduleName} where\n\n` },
+    ]);
+    setActiveModule(path);
+    setSelectedExample('');
+    setIsAddingModule(false);
+    setModuleDraft('');
+    setModuleDraftError('');
+    setResult(null);
+    setEvaluation(null);
+    setEvaluationError('');
+    setDiagnostics([]);
+    setActiveTab('uplc');
+    setActiveProgram(0);
+  };
+
+  const removeModule = (name: string) => {
+    if (name === 'Main.hs') return;
+    const sourceModule = modules.find((item) => item.name === name);
+    if (!sourceModule) return;
+    if (sourceModule.source.trim() && !window.confirm(`Delete ${name}? Its source code will be removed from this project.`)) {
+      return;
+    }
+    setModules((current) => current.filter((item) => item.name !== name));
+    if (activeModule === name) setActiveModule('Main.hs');
+    setSelectedExample('');
+    setResult(null);
+    setEvaluation(null);
+    setEvaluationError('');
+    setDiagnostics([]);
+    setActiveTab('uplc');
+    setActiveProgram(0);
+  };
+
+  const shareProject = async () => {
+    setShareState('copying');
+    setShareNotice('Creating project link');
+    try {
+      const payload = await encodeSharedProject(modules, activeModule, arguments_);
+      const url = new URL(window.location.href);
+      url.hash = new URLSearchParams({ p: payload }).toString();
+      window.history.replaceState(null, '', url);
+      const copiedToClipboard = await copyText(url.toString());
+      setShareState('copied');
+      setShareNotice(
+        `${copiedToClipboard ? 'Link copied' : 'Link ready in the address bar'} · ${modules.length} module${modules.length === 1 ? '' : 's'} included`,
+      );
+      window.setTimeout(() => setShareState('idle'), 1_600);
+    } catch (error: unknown) {
+      setShareState('error');
+      setShareNotice(error instanceof Error ? error.message : 'Could not create a project link');
     }
   };
 
@@ -383,9 +585,10 @@ export default function Home() {
     : textOutput;
 
   const copyOutput = async () => {
-    await navigator.clipboard.writeText(copyableOutput);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+    if (await copyText(copyableOutput)) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    }
   };
 
   const downloadFlat = () => {
@@ -461,6 +664,16 @@ export default function Home() {
             {isBusy ? <LoaderCircle size={13} /> : <span />}
             <span>{stateLabel}</span>
           </div>
+          <button
+            aria-label="Copy a share link containing this project"
+            className="secondary-button share-button"
+            disabled={shareState === 'copying'}
+            onClick={() => void shareProject()}
+            type="button"
+          >
+            {shareState === 'copying' ? <LoaderCircle className="lucide-loader-circle" size={14} /> : <Share2 size={14} />}
+            {shareState === 'copied' ? 'Link copied' : 'Share'}
+          </button>
           <a className="icon-button" href="https://github.com/input-output-hk/ghc-plinth/tree/ghc-9.6-plinth" target="_blank" rel="noreferrer" aria-label="Open ghc-plinth on GitHub">
             <ExternalLink size={15} />
           </a>
@@ -476,11 +689,55 @@ export default function Home() {
         </div>
       </header>
 
+      {shareNotice ? (
+        <div className="share-notice" data-state={shareState} role="status">
+          <Link size={13} />
+          <span>{shareNotice}</span>
+          <button aria-label="Dismiss share message" onClick={() => setShareNotice('')} type="button">
+            <X size={12} />
+          </button>
+        </div>
+      ) : null}
+
       <section ref={workspaceRef} className="workspace" style={workspaceStyle} aria-label="Plinth compiler workspace">
         <section className="source-pane">
-          <header className="pane-toolbar">
-            <div className="source-tabs">
-              <button className="source-tab-active" type="button"><FileCode2 size={13} /> Main.hs</button>
+          <header className="pane-toolbar source-toolbar">
+            <div className="source-tabs" role="tablist" aria-label="Project modules">
+              {modules.map((sourceModule) => (
+                <div className="module-tab" data-active={activeModule === sourceModule.name} key={sourceModule.name}>
+                  <button
+                    aria-selected={activeModule === sourceModule.name}
+                    className="module-tab-select"
+                    onClick={() => setActiveModule(sourceModule.name)}
+                    role="tab"
+                    title={sourceModule.name}
+                    type="button"
+                  >
+                    <FileCode2 size={13} />
+                    <span>{sourceModule.name}</span>
+                  </button>
+                  {sourceModule.name !== 'Main.hs' ? (
+                    <button
+                      aria-label={`Delete ${sourceModule.name}`}
+                      className="module-tab-close"
+                      onClick={() => removeModule(sourceModule.name)}
+                      title={`Delete ${sourceModule.name}`}
+                      type="button"
+                    >
+                      <X size={11} />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              <button
+                aria-label="Add a Haskell module"
+                className="add-module-tab"
+                onClick={openModuleCreator}
+                title="Add module"
+                type="button"
+              >
+                <FilePlus2 size={13} />
+              </button>
             </div>
             <label className="example-picker">
               <span>Example</span>
@@ -494,13 +751,49 @@ export default function Home() {
             </label>
           </header>
 
+          {isAddingModule ? (
+            <form className="module-creator" onSubmit={addModule}>
+              <span className="module-creator-icon"><FilePlus2 size={14} /></span>
+              <label>
+                <span>New module</span>
+                <input
+                  autoFocus
+                  onChange={(event) => {
+                    setModuleDraft(event.target.value);
+                    setModuleDraftError('');
+                  }}
+                  placeholder="Utils or Validators.Math"
+                  spellCheck={false}
+                  value={moduleDraft}
+                />
+              </label>
+              <span className="module-creator-path">
+                {moduleDraft.trim() ? moduleNameToPath(moduleDraft.trim().replace(/\.hs$/, '').replace(/\//g, '.')) : 'Module.hs'}
+              </span>
+              <button className="module-create-button" type="submit">Create</button>
+              <button
+                aria-label="Cancel adding module"
+                className="module-cancel-button"
+                onClick={() => {
+                  setIsAddingModule(false);
+                  setModuleDraftError('');
+                }}
+                type="button"
+              >
+                <X size={13} />
+              </button>
+              {moduleDraftError ? <small role="alert">{moduleDraftError}</small> : null}
+            </form>
+          ) : null}
+
           <div className="editor-area">
             <CodeMirror
-              aria-label="Plinth Haskell source"
+              aria-label={`${activeModule} Haskell source`}
               basicSetup
               className="source-editor"
               extensions={[haskellLanguage, syntaxHighlighting(haskellHighlighting)]}
               height="100%"
+              key={activeModule}
               onChange={changeSource}
               placeholder="Write a Plinth module…"
               theme="light"
@@ -511,6 +804,7 @@ export default function Home() {
           <footer className="pane-status">
             <span>Haskell</span>
             <span>{lineCount} lines</span>
+            <span>{modules.length} module{modules.length === 1 ? '' : 's'}</span>
             <span>UTF-8</span>
           </footer>
         </section>
@@ -698,7 +992,7 @@ export default function Home() {
         <span>GHC 9.12.4</span>
         <span>CEK · WASI</span>
         <span className="status-spacer" />
-        <span>Source and execution stay in this browser</span>
+        <span>Share links use URL fragments · execution stays in this browser</span>
       </footer>
     </main>
   );

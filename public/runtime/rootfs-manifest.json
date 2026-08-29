@@ -1,7 +1,7 @@
 {
   "format": "rootfs.tar.gz",
-  "version": "06799bc3f479d9d4",
-  "totalSize": 146256760,
+  "version": "d8a280805667f3f0",
+  "totalSize": 146269717,
   "parts": [
     {
       "file": "rootfs.part-000",
@@ -29,7 +29,7 @@
     },
     {
       "file": "rootfs.part-006",
-      "size": 20427640
+      "size": 20440597
     }
   ]
 }
