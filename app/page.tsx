@@ -47,6 +47,7 @@ import {
   type SourceModule,
   loadBrowserCompiler,
 } from './compiler-runtime';
+import { namedDecoderEscrowPayload } from './example-projects';
 import { decodeSharedProject, encodeSharedProject } from './project-share';
 
 const multiModuleMain = `{-# LANGUAGE ImportQualifiedPost #-}
@@ -75,6 +76,15 @@ import PlutusTx.Prelude
 addTwo :: Integer -> Integer
 addTwo value = value + 2`;
 
+type PlaygroundExample = {
+  id: string;
+  label: string;
+  args: CekArgument[];
+  source?: string;
+  modules?: SourceModule[];
+  projectPayload?: string;
+};
+
 const examples = [
   {
     id: 'plutarch-successor',
@@ -93,6 +103,12 @@ successor = plam $ \\value -> value + 1
 
 main :: IO ()
 main = exportScript "plutarchSuccessor" $ compile mempty successor`,
+  },
+  {
+    id: 'named-decoder-escrow',
+    label: 'Two-party escrow · 7 modules',
+    args: [{ kind: 'data', value: 'Constr 0 []' }],
+    projectPayload: namedDecoderEscrowPayload,
   },
   {
     id: 'successor',
@@ -195,13 +211,7 @@ validator = $$(PlutusTx.compile [|| validate ||])
 main :: IO ()
 main = pure ()`,
   },
-] satisfies Array<{
-  id: string;
-  label: string;
-  args: CekArgument[];
-  source: string;
-  modules?: SourceModule[];
-}>;
+] satisfies PlaygroundExample[];
 
 const argumentKinds: Array<{ kind: CekArgumentKind; label: string }> = [
   { kind: 'integer', label: 'Integer' },
@@ -262,8 +272,8 @@ function cloneModules(modules: SourceModule[]) {
   return modules.map((sourceModule) => ({ ...sourceModule }));
 }
 
-function modulesForExample(example: (typeof examples)[number]) {
-  return cloneModules(example.modules ?? [{ name: 'Main.hs', source: example.source }]);
+function modulesForExample(example: PlaygroundExample) {
+  return cloneModules(example.modules ?? [{ name: 'Main.hs', source: example.source ?? '' }]);
 }
 
 function moduleNameToPath(moduleName: string) {
@@ -375,6 +385,7 @@ export default function Home() {
   });
   const [isResizing, setIsResizing] = useState(false);
   const workspaceRef = useRef<HTMLElement>(null);
+  const exampleRequestRef = useRef(0);
 
   const currentModule = modules.find((sourceModule) => sourceModule.name === activeModule) ?? modules[0];
   const source = currentModule?.source ?? '';
@@ -536,16 +547,40 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [compile, runEvaluation]);
 
-  const selectExample = (id: string) => {
+  const selectExample = async (id: string) => {
+    const request = ++exampleRequestRef.current;
     const next = examples.find((example) => example.id === id) ?? examples[0];
     setSelectedExample(next.id);
-    setModules(modulesForExample(next));
+    let nextModules = modulesForExample(next);
+    let nextArguments = cloneArguments(next.args);
+
+    if (next.projectPayload) {
+      setShareState('idle');
+      setShareNotice('Loading example project');
+      try {
+        const project = await decodeSharedProject(next.projectPayload);
+        if (request !== exampleRequestRef.current) return;
+        nextModules = cloneModules(project.modules);
+        nextArguments = cloneArguments(project.arguments);
+        setShareNotice(`Example loaded · ${project.modules.length} modules`);
+      } catch (error: unknown) {
+        if (request !== exampleRequestRef.current) return;
+        setSelectedExample('');
+        setShareState('error');
+        setShareNotice(error instanceof Error ? error.message : 'Could not load this example');
+        return;
+      }
+    } else {
+      setShareNotice('');
+    }
+
+    setModules(nextModules);
     setActiveModule('Main.hs');
     setCollapsedFolders(new Set());
     setIsAddingModule(false);
     setModuleDraft('');
     setModuleDraftError('');
-    setArguments(cloneArguments(next.args));
+    setArguments(nextArguments);
     setResult(null);
     setEvaluation(null);
     setEvaluationError('');
@@ -917,7 +952,7 @@ export default function Home() {
               <label className="example-picker project-example-picker">
                 <span>Load example</span>
                 <span className="select-wrap">
-                  <select value={selectedExample} onChange={(event) => selectExample(event.target.value)}>
+                  <select value={selectedExample} onChange={(event) => void selectExample(event.target.value)}>
                     {selectedExample === '' ? <option value="">Custom project</option> : null}
                     {examples.map((example) => <option key={example.id} value={example.id}>{example.label}</option>)}
                   </select>

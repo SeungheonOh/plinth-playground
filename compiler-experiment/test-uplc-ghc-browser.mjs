@@ -3,9 +3,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
 const workdir = path.dirname(fileURLToPath(import.meta.url));
 const sourceFile = process.env.BROWSER_SOURCE ?? "BrowserPlinth.hs";
+const bundledProjectFile = process.env.BROWSER_PROJECT_PAYLOAD;
 const extraSourceFiles = process.env.BROWSER_EXTRA_SOURCES
   ?.split(",")
   .map((source) => source.trim())
@@ -81,21 +83,34 @@ const compile = await linker.exportFuncs.uplcGhcBrowser(
   libdir,
   `${storePackageDb}:${projectPackageDb}:`,
 );
-const modules = [
-  ["Main.hs", await fs.readFile(path.join(workdir, sourceFile), "utf8")],
-];
-for (const extraSourceSpec of extraSourceFiles) {
-  const separator = extraSourceSpec.indexOf("=");
-  const filename = separator === -1
-    ? extraSourceSpec
-    : extraSourceSpec.slice(0, separator);
-  const sourceFilePath = separator === -1
-    ? extraSourceSpec
-    : extraSourceSpec.slice(separator + 1);
-  modules.push([
-    filename,
-    await fs.readFile(path.join(workdir, sourceFilePath), "utf8"),
-  ]);
+let modules;
+if (bundledProjectFile) {
+  const payloadModule = await fs.readFile(path.join(workdir, bundledProjectFile), "utf8");
+  const chunks = [...payloadModule.matchAll(/^\s*'([^']*)',\s*$/gm)]
+    .map((match) => match[1]);
+  if (chunks.length === 0) throw new Error("Bundled example contains no project payload");
+  const payload = chunks.join("");
+  if (payload[0] !== "z") throw new Error("Bundled example is not gzip-compressed");
+  const encoded = payload.slice(1).replace(/-/g, "+").replace(/_/g, "/");
+  const decoded = JSON.parse(gunzipSync(Buffer.from(encoded, "base64")));
+  modules = decoded.modules.map(({ name, source }) => [name, source]);
+} else {
+  modules = [
+    ["Main.hs", await fs.readFile(path.join(workdir, sourceFile), "utf8")],
+  ];
+  for (const extraSourceSpec of extraSourceFiles) {
+    const separator = extraSourceSpec.indexOf("=");
+    const filename = separator === -1
+      ? extraSourceSpec
+      : extraSourceSpec.slice(0, separator);
+    const sourceFilePath = separator === -1
+      ? extraSourceSpec
+      : extraSourceSpec.slice(separator + 1);
+    modules.push([
+      filename,
+      await fs.readFile(path.join(workdir, sourceFilePath), "utf8"),
+    ]);
+  }
 }
 const project = [
   "PLINTH_PROJECT_V1",
@@ -118,7 +133,7 @@ const compiledOutputs = await compile(
     "-fno-unbox-strict-fields",
     "-fprefer-byte-code",
     "-fno-unoptimized-core-for-interpreter",
-    "-fwrite-interface",
+    "-fno-write-interface",
     "-fforce-recomp",
   ].join(" "),
   project,

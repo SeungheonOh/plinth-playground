@@ -107,4 +107,9 @@ esac
 
 echo "$EVALUATED_PLUTARCH"
 
+BROWSER_PROJECT_PAYLOAD=../app/example-projects.ts \
+BROWSER_EXTRA_ARGS=-package-id=plutus-ledger-api-1.66.0.0-inplace \
+  node test-uplc-ghc-browser.mjs
+echo "Bundled two-party escrow example compiled successfully"
+
 sha256sum BrowserPlinth.uplc-flat uplc-ghc.wasm libuplc-ghc-browser.so
