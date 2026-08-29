@@ -47,6 +47,7 @@ wasm32-wasi-cabal \
   --builddir="$BUILD_DIR" \
   build \
   lib:plinth-browser-utils \
+  lib:plutarch-browser \
   lib:plutus-tx-plugin \
   exe:uplc-ghc-9-12
 

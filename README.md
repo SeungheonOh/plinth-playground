@@ -2,14 +2,15 @@
 
 [![CI and deploy](https://github.com/SeungheonOh/plinth-playground/actions/workflows/deploy.yml/badge.svg?branch=master)](https://github.com/SeungheonOh/plinth-playground/actions/workflows/deploy.yml)
 
-A browser-hosted Plinth compiler and evaluator. It runs the real GHC + Plinth
-toolchain in a Web Worker, displays the generated Untyped Plutus Core and Flat
-bytes, and evaluates the result with Plinth's CEK machine compiled to WASI.
+A browser-hosted Plinth and Plutarch compiler and evaluator. It runs the real
+GHC, Plinth, and Plutarch toolchain in a Web Worker, displays the generated
+Untyped Plutus Core and Flat bytes, and evaluates the result with Plinth's CEK
+machine compiled to WASI.
 Compilation and execution happen locally in the browser; there is no compiler
 or evaluator API server.
 
-Projects can contain multiple Haskell modules. Add modules from the file-tab
-bar using names such as `Utils` or `Validators.Math`; the compiler builds them
+Projects can contain multiple Haskell modules. Add modules from the project
+tree using names such as `Utils` or `Validators.Math`; the compiler builds them
 inside WASM and makes them available to `Main.hs` through ordinary Haskell
 imports. Functions used across module boundaries by compiled Plinth code must
 have an exported unfolding. GHC usually exports small optimized functions;
@@ -24,6 +25,10 @@ and Plutus Data constants. It reports the reduced UPLC, execution budget, and
 trace logs. CEK execution is budget-bounded so nonterminating programs cannot
 run indefinitely.
 
+The Plutarch example uses `Plutarch.Browser.dumpScript` to export a typed term
+as Flat UPLC. That output follows the same decode, argument-application, and CEK
+execution path as scripts emitted by the Plinth plugin.
+
 ## Local development
 
 ```sh
@@ -31,7 +36,7 @@ npm ci
 npm run dev
 ```
 
-The first browser load downloads roughly 140 MB of compiler files from
+The first browser load downloads roughly 150 MB of compiler files from
 `public/runtime`. The 10 MB CEK evaluator is loaded lazily on the first run.
 Compiler files are split into chunks small enough for normal Git and Cloudflare
 asset uploads.

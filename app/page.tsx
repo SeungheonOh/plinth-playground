@@ -77,6 +77,28 @@ addTwo value = value + 2`;
 
 const examples = [
   {
+    id: 'plutarch-successor',
+    label: 'Plutarch successor',
+    args: [{ kind: 'integer', value: '41' }],
+    source: `{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators #-}
+module Main where
+
+import Plutarch.Browser (dumpScript)
+import Plutarch.Internal.Term (compile)
+import Plutarch.Prelude
+
+$(dumpScript "plutarchSuccessor" $
+    compile mempty $
+      (plam (\\value -> value + 1) ::
+        forall s. Term s (PInteger :--> PInteger)))
+
+main :: IO ()
+main = pure ()`,
+  },
+  {
     id: 'successor',
     label: 'Integer successor',
     args: [{ kind: 'integer', value: '41' }],
@@ -228,7 +250,7 @@ type RuntimeState = 'loading' | 'ready' | 'compiling' | 'evaluating' | 'error';
 type OutputTab = 'uplc' | 'run' | 'flat' | 'diagnostics';
 type ShareState = 'idle' | 'copying' | 'copied' | 'error';
 
-const waitingMessage = `Compile the project to inspect the Untyped Plutus Core emitted by Plinth.Plugin.
+const waitingMessage = `Compile the project to inspect the Untyped Plutus Core emitted by Plinth or Plutarch.
 
 GHC, Plinth, and the CEK evaluator all run locally in this browser. The first visit downloads the compiler runtime; later visits use the browser cache.`;
 
@@ -450,7 +472,7 @@ export default function Home() {
   const compile = useCallback(async () => {
     if (!compiler || runtimeState !== 'ready') return;
     setRuntimeState('compiling');
-    setRuntimeDetail('Running Plinth.Plugin');
+    setRuntimeDetail('Compiling project');
     setDiagnostics([]);
     setResult(null);
     setEvaluation(null);

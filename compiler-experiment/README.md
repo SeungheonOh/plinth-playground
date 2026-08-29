@@ -28,3 +28,17 @@ and materializes the patched GHC driver source. The build script compiles and
 tests the driver, browser reactor, decoder, evaluator, and optional-library
 shim. The rootfs script strips static build material and writes the deployable
 chunked runtime to `../public/runtime`.
+
+The runtime also includes Plutarch 1.14.0 from the pinned
+`Plutonomicon/plutarch-plutus` revision. Browser projects can export a Plutarch
+term to the playground with `Plutarch.Browser.dumpScript`:
+
+```haskell
+$(dumpScript "successor" $
+    compile mempty $
+      (plam (\value -> value + 1) ::
+        forall s. Term s (PInteger :--> PInteger)))
+```
+
+The helper serializes the compiled Plutarch `Script` to Flat UPLC, which is
+then decoded and evaluated by the same in-browser CEK machine as Plinth output.

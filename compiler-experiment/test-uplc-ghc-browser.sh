@@ -70,4 +70,32 @@ esac
 
 echo "$DECODED_MULTI"
 
+BROWSER_SOURCE=BrowserPlutarch.hs \
+BROWSER_EXTRA_ARGS="-package=plutarch -package=plutarch-browser" \
+  node test-uplc-ghc-browser.mjs
+DECODED_PLUTARCH=$(node "$WASM_RUN" decode-uplc.wasm BrowserPlinth.uplc-flat)
+
+case "$DECODED_PLUTARCH" in
+  *"(builtin addInteger)"*"(con integer 1)"*) ;;
+  *)
+    echo "Decoded Plutarch output is not the expected successor program:" >&2
+    echo "$DECODED_PLUTARCH" >&2
+    exit 1
+    ;;
+esac
+
+echo "$DECODED_PLUTARCH"
+
+EVALUATED_PLUTARCH=$(node "$WASM_RUN" evaluate-uplc.wasm BrowserPlinth.uplc-flat integer:41)
+case "$EVALUATED_PLUTARCH" in
+  *$'RESULT\t28636f6e20696e746567657220343229'*) ;;
+  *)
+    echo "Plutarch successor did not evaluate to 42:" >&2
+    echo "$EVALUATED_PLUTARCH" >&2
+    exit 1
+    ;;
+esac
+
+echo "$EVALUATED_PLUTARCH"
+
 sha256sum BrowserPlinth.uplc-flat uplc-ghc.wasm libuplc-ghc-browser.so

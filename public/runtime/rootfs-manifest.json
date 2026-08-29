@@ -1,7 +1,7 @@
 {
   "format": "rootfs.tar.gz",
-  "version": "75ff7a0bad28b708",
-  "totalSize": 146324439,
+  "version": "3124dd8f87938497",
+  "totalSize": 149061718,
   "parts": [
     {
       "file": "rootfs.part-000",
@@ -29,7 +29,16 @@
     },
     {
       "file": "rootfs.part-006",
-      "size": 20495319
+      "size": 20971520
+    },
+    {
+      "file": "rootfs.part-007",
+      "size": 2261078
     }
-  ]
+  ],
+  "compiler": {
+    "ghcPrefix": "/home/sho/fun/ghc-wasm-toolchain-9.12",
+    "ghcVersion": "9.12.4.20260731",
+    "projectPackageDb": "/home/sho/fun/ghc-plinth-wasm-playground/compiler-experiment/dist-uplc-ghc-wasm-9.12/packagedb/ghc-9.12.4.20260731"
+  }
 }

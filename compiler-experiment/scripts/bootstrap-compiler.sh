@@ -16,6 +16,7 @@ GHC_SOURCE_REV=b426432eec93dbad489e82287cb816bc23cdd8b4
 GHC_MAIN_SHA256=236792060f81de1bacbdecc7d766e72a2ae85cce3a13b3f5f08e6b5d0fe4139a
 GHCP_REV=c2d3bc3df6e2d018b57be9c87385f48d92b77d72
 PLUTUS_REV=2e582ecde824238f927322d208740322eada8115
+PLUTARCH_REV=87e11994c45b6af4768e5b6146d9c94879e279b5
 FOUNDATION_REV=8e6dd48527fb429c1922083a5030ef88e3d58dd3
 NETWORK_REV=1dc870889eee4ac733335ced4e274b4dfe8ed369
 CBORG_REV=6ef2791ca41b397a3e36c868ad3e66a0d09f19b2
@@ -181,6 +182,14 @@ clone_pinned \
 apply_git_patch "$DEPS_DIR/plutus" "$PATCH_DIR/plutus-dump-close.patch"
 
 clone_pinned \
+  https://github.com/Plutonomicon/plutarch-plutus.git \
+  "$PLUTARCH_REV" \
+  "$DEPS_DIR/plutarch"
+apply_git_patch \
+  "$DEPS_DIR/plutarch" \
+  "$PATCH_DIR/plutarch-plutus-1.66.patch"
+
+clone_pinned \
   https://github.com/haskell-wasm/foundation.git \
   "$FOUNDATION_REV" \
   "$VENDOR_DIR/foundation"
@@ -247,6 +256,7 @@ printf '%s\n' \
   "Prepared compiler sources and WASI dependencies." \
   "ghc-plinth parent revision: $GHCP_REV" \
   "Plinth submodule revision:  $PLUTUS_REV" \
+  "Plutarch revision:          $PLUTARCH_REV" \
   "GHC WASM version:           $actual_ghc_version" \
   "Toolchain:                  $TOOLCHAIN_DIR" \
   "Dependencies:               $DEPS_DIR"

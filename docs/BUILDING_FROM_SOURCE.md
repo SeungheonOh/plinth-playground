@@ -22,7 +22,7 @@ Allow approximately:
 - 16 GB RAM; 32 GB is more comfortable during the Cabal build;
 - 30–50 GB free disk space for the toolchain, Cabal store, sources, and build
   tree;
-- 140 MB for the final compressed browser filesystem;
+- 150 MB for the final compressed browser filesystem;
 - 30–120 minutes for a cold build, depending on CPU and network speed.
 
 Install these host tools:
@@ -66,12 +66,13 @@ The script performs these operations in order:
 
 1. installs the pinned GHC 9.12 WASM toolchain;
 2. verifies the `ghc-plinth` parent commit and fetches its pinned Plinth
-   submodule plus the WASI-compatible dependency sources;
+   submodule, Plutarch, and the WASI-compatible dependency sources;
 3. verifies downloaded Hackage tarballs by SHA-256;
 4. applies the repository's small WASI compatibility patches;
 5. builds the actual `uplc-ghc` driver and browser compiler reactor;
 6. builds and validates the Flat decoder and CEK evaluator;
-7. runs single-module, packaged-module, and multi-module compiler tests;
+7. runs single-module, packaged-module, multi-module, and Plutarch compiler
+   tests;
 8. creates the stripped browser filesystem and splits it into 20 MiB assets;
 9. installs JavaScript dependencies, lints the application, and builds the
    production website.
@@ -116,6 +117,7 @@ branches.
 | --- | --- | --- |
 | `ghc-plinth` parent | `input-output-hk/ghc-plinth` | `c2d3bc3df6e2d018b57be9c87385f48d92b77d72` |
 | Plinth source submodule | `input-output-hk/ghc-plinth-plutus` | `2e582ecde824238f927322d208740322eada8115` |
+| Plutarch | `Plutonomicon/plutarch-plutus` | `87e11994c45b6af4768e5b6146d9c94879e279b5` |
 | GHC WASM meta installer | `ghc/ghc-wasm-meta` | `8fd59591635cb47ad7db124562039bea8441cae8` |
 | GHC 9.12 WASM source | `haskell-wasm/ghc` | `b426432eec93dbad489e82287cb816bc23cdd8b4` |
 | `foundation` WASI port | `haskell-wasm/foundation` | `8e6dd48527fb429c1922083a5030ef88e3d58dd3` |
@@ -147,6 +149,7 @@ All local changes to upstream source are stored in
 | --- | --- |
 | `ghc-main-plinth.patch` | Statically registers `Plinth.Plugin` in the GHC command-line driver. A browser cannot discover and load an arbitrary native plugin DLL. |
 | `plutus-dump-close.patch` | Closes Flat dump handles before the browser wrapper immediately reads the generated file. |
+| `plutarch-plutus-1.66.patch` | Aligns Plutarch's exact `plutus-core` constraint with the pinned Plinth 1.66 source tree. |
 | `libsodium-wasi.patch` | Uses the package version required by Plinth and disables an unavailable WASI system header. |
 | `ram-wasi.patch` | Selects little-endian WASI and links the emulated `mman` library. |
 | `crypton-wasi.patch` | Disables Argon2 threads, which are unavailable in this WASI runtime. |
@@ -221,10 +224,12 @@ loads the reactor through GHC's actual `dyld.mjs`, and checks:
 1. a single `Main.hs` using `$$(PlutusTx.compile ...)`;
 2. a program importing the packaged browser `Utils` module;
 3. a two-file project whose `Main.hs` imports a Plinth function from a support
-   module.
+   module;
+4. a Plutarch term exported as Flat UPLC and evaluated by the WASM CEK machine.
 
 The resulting Flat programs are decoded with the independently built Plinth
-decoder and checked for their expected `addInteger` constants.
+decoder and checked for their expected `addInteger` constants. The Plutarch
+successor is also applied to `41` and must reduce to `42`.
 
 After rebuilding the root filesystem, run the website and compile both the
 default and multi-module examples in a real browser:
@@ -233,9 +238,9 @@ default and multi-module examples in a real browser:
 npm run dev
 ```
 
-The first load downloads roughly 140 MB. Use the browser network panel to
+The first load downloads roughly 150 MB. Use the browser network panel to
 confirm that all `rootfs.part-*` requests succeed and that the worker reaches
-“Plinth compiler ready.”
+“runtime ready.”
 
 ## Using an existing toolchain or alternate directories
 

@@ -1,0 +1,18 @@
+cabal-version: 3.0
+name: plutarch-browser
+version: 0.1.0.0
+build-type: Simple
+license: MIT
+
+library
+  exposed-modules: Plutarch.Browser
+  hs-source-dirs: src
+  default-language: GHC2021
+  build-depends:
+      base >=4 && <5,
+      bytestring,
+      plutarch ==1.14.0,
+      plutus-core ==1.66.0.0,
+      plutus-core:flat ==1.66.0.0,
+      template-haskell,
+      text

@@ -50,6 +50,7 @@ source-repository-package
 packages:
   ./uplc-ghc-wasm-9.12
   ./browser-modules
+  ./plutarch-browser
   ./.compiler-deps/vendor/foundation/basement
   ./.compiler-deps/vendor/double-conversion-2.0.5.0
   ./.compiler-deps/vendor/network
@@ -63,6 +64,7 @@ packages:
   ./.compiler-deps/plutus/plutus-core
   ./.compiler-deps/plutus/plutus-metatheory
   ./.compiler-deps/plutus/plutus-ledger-api
+  ./.compiler-deps/plutarch
 
 package secp256k1-clib
   flags: +schnorrsig +recovery +ecdh +extrakeys
@@ -81,6 +83,9 @@ package plutus-core
 
 package plutus-tx-plugin
   profiling: False
+
+package plutarch
+  ghc-options: -Wwarn
 
 tests: False
 benchmarks: False

@@ -29,6 +29,8 @@ const LEGACY_COMPILER_PATHS = {
 const PLINTH_FLAGS = [
   '-package=plutus-tx',
   '-package=plinth-browser-utils',
+  '-package=plutarch',
+  '-package=plutarch-browser',
   '-fplugin-opt=Plinth.Plugin:dump-uplc',
   '-Wno-missed-extra-shared-lib',
   '-v1',
