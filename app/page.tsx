@@ -759,7 +759,6 @@ export default function Home() {
     <main className={`playground-shell${isResizing ? ' is-resizing' : ''}`}>
       <header className="topbar">
         <div className="identity">
-          <span className="identity-mark">λ</span>
           <span className="identity-copy">
             <strong>Plinth Playground</strong>
             <small>Compile and run Plutus in your browser</small>
@@ -824,16 +823,6 @@ export default function Home() {
                 <span>{activeModule}</span>
               </div>
             </div>
-            <label className="example-picker">
-              <span>Example</span>
-              <span className="select-wrap">
-                <select value={selectedExample} onChange={(event) => selectExample(event.target.value)}>
-                  {selectedExample === '' ? <option value="">Custom source</option> : null}
-                  {examples.map((example) => <option key={example.id} value={example.id}>{example.label}</option>)}
-                </select>
-                <ChevronDown size={12} />
-              </span>
-            </label>
           </header>
 
           <div className="source-workspace" data-tree-open={isFileTreeOpen}>
@@ -907,6 +896,16 @@ export default function Home() {
                   );
                 })}
               </div>
+              <label className="example-picker project-example-picker">
+                <span>Load example</span>
+                <span className="select-wrap">
+                  <select value={selectedExample} onChange={(event) => selectExample(event.target.value)}>
+                    {selectedExample === '' ? <option value="">Custom project</option> : null}
+                    {examples.map((example) => <option key={example.id} value={example.id}>{example.label}</option>)}
+                  </select>
+                  <ChevronDown size={12} />
+                </span>
+              </label>
             </aside>
             <div className="editor-area">
               <CodeMirror
