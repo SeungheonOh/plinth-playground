@@ -15,9 +15,15 @@ import type {
   CompiledProgram,
   OutputKind,
 } from './compiler-runtime';
+import { packageOptimizationCertificates, type OptimizationCertification } from './optimization-certificate';
 
 const RUNTIME = '/runtime';
 const CEK_RUNTIME_VERSION = 'plinth-1.66-bounded-v1';
+const CERTIFICATE_DIRECTORY = 'plinth-certificates';
+const CERTIFICATION_FLAGS = [
+  `-fplugin-opt=Plinth.Plugin:certify=/tmp/${CERTIFICATE_DIRECTORY}`,
+  '-fplugin-opt=Plinth.Plugin:certified-opts-only',
+].join(' ');
 const LEGACY_COMPILER_PATHS = {
   ghcPrefix: '/home/sho/fun/ghc-wasm-toolchain-9.12',
   ghcVersion: '9.12.4.20260731',
@@ -98,6 +104,7 @@ let compileFunction: CompileFunction;
 let decoderModule: WebAssembly.Module;
 let evaluatorModulePromise: Promise<WebAssembly.Module> | null = null;
 let rootfs: PreopenDirectory;
+let runtimeVersion = 'unknown';
 
 function postProgress(progress: number, detail: string) {
   self.postMessage({ type: 'progress', progress, detail });
@@ -166,6 +173,7 @@ async function fetchRuntimeArchive() {
     archive,
     format: manifest.format,
     compiler: manifest.compiler ?? LEGACY_COMPILER_PATHS,
+    version: manifest.version ?? 'unknown',
   };
 }
 
@@ -306,6 +314,26 @@ function collectSharedLibraryDirectories(directory: Directory) {
   return [...directories];
 }
 
+function prepareCertificateDirectory() {
+  const existing = rootfs.dir.contents.get('tmp');
+  const temporary = existing instanceof Directory ? existing : new Directory(new Map());
+  rootfs.dir.contents.set('tmp', temporary);
+  // Discard artifacts from the previous request, including failed compiles.
+  // This directory is exclusively owned by the browser certification path.
+  temporary.contents.set(CERTIFICATE_DIRECTORY, new Directory(new Map()));
+  return temporary;
+}
+
+function collectFiles(directory: Directory, prefix = ''): Record<string, Uint8Array> {
+  const files: Record<string, Uint8Array> = Object.create(null);
+  for (const [name, entry] of directory.contents) {
+    const path = prefix ? `${prefix}/${name}` : name;
+    if (entry instanceof Directory) Object.assign(files, collectFiles(entry, path));
+    else if (entry instanceof File) files[path] = new Uint8Array(entry.data);
+  }
+  return files;
+}
+
 async function decodeProgram(filename: string) {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -419,6 +447,7 @@ async function initialize() {
     WebAssembly.compileStreaming(fetch(`${RUNTIME}/decode-uplc.wasm`)),
   ]);
   decoderModule = compiledDecoder;
+  runtimeVersion = runtimeArchive.version;
 
   let searchDirs: string[];
   if (
@@ -484,7 +513,7 @@ async function initialize() {
 }
 
 self.onmessage = async (event: MessageEvent<
-  | { type: 'compile'; requestId: number; project: string }
+  | { type: 'compile'; requestId: number; project: string; certify: boolean }
   | { type: 'evaluate'; requestId: number; filename: string; args: CekArgument[] }
 >) => {
   const { requestId } = event.data;
@@ -502,8 +531,10 @@ self.onmessage = async (event: MessageEvent<
       return;
     }
 
-    const { project } = event.data;
-    const encodedOutputs = await compileFunction(PLINTH_FLAGS, project);
+    const { project, certify } = event.data;
+    const temporary = prepareCertificateDirectory();
+    const flags = certify ? `${PLINTH_FLAGS} ${CERTIFICATION_FLAGS}` : PLINTH_FLAGS;
+    const encodedOutputs = await compileFunction(flags, project);
     const programs: CompiledProgram[] = [];
     for (const record of encodedOutputs.trim().split('\n')) {
       const [filename, flatHex] = record.split('\t');
@@ -517,11 +548,35 @@ self.onmessage = async (event: MessageEvent<
         uplc: await decodeProgram(filename),
       });
     }
+    let certification: OptimizationCertification = {
+      status: 'disabled', projects: [], message: 'Optimization certification was disabled for this build.',
+    };
+    if (certify) {
+      try {
+        const certificateDirectory = temporary.contents.get(CERTIFICATE_DIRECTORY);
+        const sourceDirectory = temporary.contents.get('plinth-project');
+        certification = await packageOptimizationCertificates({
+          files: certificateDirectory instanceof Directory ? collectFiles(certificateDirectory) : {},
+          sources: sourceDirectory instanceof Directory
+            ? Object.fromEntries(Object.entries(collectFiles(sourceDirectory)).filter(([path]) => path.endsWith('.hs')))
+            : {},
+          programs, flags, runtimeVersion,
+        });
+      } catch (error) {
+        certification = {
+          status: 'unavailable', projects: [],
+          message: `Could not package certificates: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      postOutput('stdout', certification.message);
+    }
     const result: CompileResult = {
       elapsedMs: performance.now() - startedAt,
       programs,
+      certification,
     };
-    self.postMessage({ type: 'compile-result', requestId, result });
+    self.postMessage({ type: 'compile-result', requestId, result },
+      certification.archive ? [certification.archive.bytes.buffer] : []);
   } catch (error) {
     self.postMessage({
       type: 'error',

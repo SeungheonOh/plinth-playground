@@ -30,6 +30,40 @@ export a locally defined typed term as Flat UPLC. Every successful project runs
 `Main.main`; the output then follows the same decode, argument-application, and
 CEK execution path as scripts emitted by the Plinth plugin.
 
+## Optimization certificates
+
+“Certify optimizations” is enabled by default. Compilation passes `certify` and
+`certified-opts-only` to the bundled Plinth plugin, which runs its Agda-derived
+certifier and emits an Agda project for each compiled Plinth expression.
+The result panel shows the certifier outcome and a **Certificates .zip** download.
+The ZIP includes the original generated projects, PASS/FAIL reports, Haskell
+sources, Flat/text UPLC outputs, and a manifest of compiler flags and file hashes.
+Artifacts are cleared before each compilation, including failed compilations.
+
+Selecting certified passes can change script size and execution cost. Uncheck
+the option to use the usual optimization pipeline. These certificates cover the
+UPLC optimization trace, not the Haskell-to-PIR/PLC translation or contract
+correctness. Plutarch exports are not covered by this Plinth plugin feature.
+Per-module plugin options can override the build flags; a trace containing
+unsupported passes is labeled partial even when the plugin's marker says PASS.
+
+To independently type-check a downloaded project, follow its README using Agda
+2.8.0, standard-library 2.3, and `plutus-metatheory` from the pinned Plutus revision
+`2e582ecde824238f927322d208740322eada8115`. The playground runs the embedded
+certifier but does not run this separate Agda type-checking step.
+
+Run `npm run test:certificates` to check archive integrity and PASS/FAIL/partial
+handling. With the app running locally and Chrome installed, the full WASM and
+download check is:
+
+```sh
+CHROME_EXECUTABLE=/path/to/chrome PLINTH_URL=http://localhost:5174 npm run test:certificates:browser
+```
+
+It checks multiple modules and compile splices, a nontrivial optimization proof,
+CEK execution, ZIP downloads, stale/failed-build handling, opting out, Plutarch
+exports, and desktop/mobile layout.
+
 ## Local development
 
 ```sh

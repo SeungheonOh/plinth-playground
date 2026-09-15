@@ -36,6 +36,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test certificate downloads
+        run: npm run test:certificates
+
       - name: Build
         run: npm run build
 

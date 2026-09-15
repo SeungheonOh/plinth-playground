@@ -370,6 +370,7 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [result, setResult] = useState<CompileResult | null>(null);
+  const [certifyOptimizations, setCertifyOptimizations] = useState(true);
   const [activeTab, setActiveTab] = useState<OutputTab>('uplc');
   const [activeProgram, setActiveProgram] = useState(0);
   const [arguments_, setArguments] = useState<CekArgument[]>(cloneArguments(examples[0].args));
@@ -492,7 +493,7 @@ export default function Home() {
       const compiled = await compiler.compile(modules, (_kind, message) => {
         lines.push(message);
         setDiagnostics([...lines]);
-      });
+      }, { certify: certifyOptimizations });
       setResult(compiled);
       setActiveTab('run');
       setRuntimeDetail(`${compiled.programs.length} program${compiled.programs.length === 1 ? '' : 's'} compiled in ${(compiled.elapsedMs / 1000).toFixed(1)}s`);
@@ -509,7 +510,7 @@ export default function Home() {
     } finally {
       setRuntimeState('ready');
     }
-  }, [compiler, modules, runtimeState]);
+  }, [compiler, modules, runtimeState, certifyOptimizations]);
 
   const runEvaluation = useCallback(async () => {
     if (!compiler || !program || runtimeState !== 'ready') return;
@@ -763,6 +764,17 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(url), 500);
   };
 
+  const downloadCertificates = () => {
+    const archive = result?.certification.archive;
+    if (!archive) return;
+    const url = URL.createObjectURL(new Blob([archive.bytes], { type: 'application/zip' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = archive.filename;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const updateSplitFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!isResizing || !workspaceRef.current) return;
     const bounds = workspaceRef.current.getBoundingClientRect();
@@ -876,6 +888,18 @@ export default function Home() {
                 <span>{activeModule}</span>
               </div>
             </div>
+            <label
+              className="certification-option"
+              title="Generate Agda certificates on the next build using only supported UPLC optimization passes. May change script size and execution cost."
+            >
+              <input
+                type="checkbox"
+                checked={certifyOptimizations}
+                disabled={isBusy}
+                onChange={(event) => setCertifyOptimizations(event.target.checked)}
+              />
+              Certify optimizations
+            </label>
           </header>
 
           <div className="source-workspace" data-tree-open={isFileTreeOpen}>
@@ -1023,6 +1047,32 @@ export default function Home() {
               <button type="button" disabled={!program} onClick={downloadFlat}><Download size={13} />Flat</button>
             </div>
           </header>
+
+          {result ? (
+            <div className="certification-result" data-status={result.certification.status} role="status">
+              <div title={result.certification.message}>
+                <strong>
+                  {result.certification.status === 'passed' ? 'Optimization certifier passed'
+                    : result.certification.status === 'partial' ? 'Partial optimization certification'
+                      : result.certification.status === 'failed' ? 'Optimization certification failed'
+                        : result.certification.status === 'disabled' ? 'Certification off for this build'
+                          : 'No optimization certificate'}
+                </strong>
+                <span>
+                  {result.certification.projects.length > 0
+                    ? `${result.certification.projects.length} Agda project${result.certification.projects.length === 1 ? '' : 's'} · UPLC optimizations`
+                    : result.certification.status === 'disabled' ? 'Enable “Certify optimizations” before compiling.'
+                      : result.certification.message}
+                </span>
+              </div>
+              {result.certification.archive ? (
+                <button className="certificate-download" type="button" onClick={downloadCertificates}>
+                  <Download size={13} />
+                  {result.certification.status === 'passed' ? 'Certificates .zip' : 'Certificate report .zip'}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
           {result && result.programs.length > 1 ? (
             <div className="program-tabs">

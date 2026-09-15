@@ -1013,6 +1013,82 @@ kbd {
   opacity: .36;
 }
 
+.certification-option {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 9px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.certification-option input {
+  accent-color: var(--primary);
+  height: 13px;
+  margin: 0;
+  width: 13px;
+}
+
+.certification-result {
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: space-between;
+  padding: 9px 12px;
+}
+
+.certification-result > div {
+  display: flex;
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.certification-result strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.certification-result span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.certification-result[data-status='passed'] strong {
+  color: var(--primary);
+}
+
+.certification-result[data-status='failed'] strong,
+.certification-result[data-status='partial'] strong {
+  color: #a14620;
+}
+
+.certificate-download {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 9px;
+  gap: 6px;
+  height: 29px;
+  justify-content: center;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.certificate-download:hover {
+  background: var(--surface-hover);
+}
+
 .program-tabs {
   background: var(--surface);
   border-bottom: 1px solid var(--border);

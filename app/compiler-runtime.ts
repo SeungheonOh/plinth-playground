@@ -1,4 +1,5 @@
 import PlinthCompilerWorker from './compiler.worker.ts?worker';
+import type { OptimizationCertification } from './optimization-certificate';
 
 export type OutputKind = 'stdout' | 'stderr';
 export type OutputListener = (kind: OutputKind, message: string) => void;
@@ -14,6 +15,7 @@ export type CompiledProgram = {
 export type CompileResult = {
   elapsedMs: number;
   programs: CompiledProgram[];
+  certification: OptimizationCertification;
 };
 
 export type SourceModule = {
@@ -41,7 +43,7 @@ export type CekEvaluationResult = {
 };
 
 export type BrowserCompiler = {
-  compile: (modules: SourceModule[], listener: OutputListener) => Promise<CompileResult>;
+  compile: (modules: SourceModule[], listener: OutputListener, options?: { certify: boolean }) => Promise<CompileResult>;
   evaluate: (filename: string, args: CekArgument[]) => Promise<CekEvaluationResult>;
 };
 
@@ -102,7 +104,7 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
       if (message.type === 'ready') {
         initialized = true;
         resolve({
-          compile(modules, listener) {
+          compile(modules, listener, options = { certify: true }) {
             const requestId = nextRequestId++;
             return new Promise<CompileResult>((resolveCompile, rejectCompile) => {
               pending.set(requestId, {
@@ -114,6 +116,7 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
                 type: 'compile',
                 requestId,
                 project: serializeProject(modules),
+                certify: options.certify,
               });
             });
           },
