@@ -2,8 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Code2, FileCode2, Layers3 } from 'lucide-react';
-import type { BrowserCompiler } from './compiler-runtime';
-import type { DebugObject, DebugReference, DebugSnapshot, SourceSpan } from './cek-debugger';
+import type { BrowserCompiler, SourceModule } from './compiler-runtime';
+import { focusedProjectSpans, type DebugObject, type DebugReference, type DebugSnapshot, type SourceSpan } from './cek-debugger';
 
 type InspectorContext = {
   epoch: number;
@@ -49,7 +49,8 @@ function presentReference(reference: DebugReference) {
     name = type === 'environment' ? description.replace(/ \(.*/, '') : 'Value';
   }
   if (name === preview) preview = '';
-  return { name, type, preview, indexed: !!indexed };
+  if (reference.preview && (type === 'term' || type === 'builtin' || type === 'environment')) preview = reference.preview;
+  return { name: reference.name || name, index: indexed?.[1], type, preview, indexed: !!indexed };
 }
 
 function FullText({ text }: { text: string }) {
@@ -71,7 +72,7 @@ function ValueNode({ reference, path }: { reference: DebugReference; path: strin
   return <div className="inspector-node" data-open={open} data-indexed={display.indexed}>
     <button type="button" className="inspector-node-toggle" aria-expanded={open} onClick={() => context.toggle(path, false)}>
       {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-      <span className="inspector-node-name" title={display.name}>{display.name}</span>
+      <span className="inspector-node-name" title={display.name}>{display.name}{reference.name && display.index ? <small>[{display.index}]</small> : null}</span>
       <span className="inspector-type" data-type={display.type}>{display.type}</span>
       <code className="inspector-preview" title={display.preview}>{display.preview || '…'}</code>
     </button>
@@ -106,25 +107,27 @@ function EnvironmentCard({ reference }: { reference: DebugReference | null }) {
         : !loaded?.value ? <p className="inspector-loading">Reading bindings…</p>
           : !loaded.value.children.length ? <div className="inspector-empty-state"><Layers3 size={18} /><strong>No bindings yet</strong><p>Bindings appear when arguments enter a function.</p></div>
             : <>
-              <div className="inspector-table-heading"><span>Index</span><span>Type</span><span>Value</span></div>
+              <div className="inspector-table-heading"><span>Binding</span><span>Type</span><span>Value</span></div>
               <div className="inspector-bindings">{loaded.value.children.map((child, index) => <ValueNode key={index} reference={child} path={`environment/${index}`} />)}</div>
-              <footer className="inspector-card-note">Index 1 is the most recent binding.</footer>
+              <footer className="inspector-card-note">Names retained in UPLC. Brackets show the environment index.</footer>
             </>}
   </section>;
 }
 
 function FrameCard({ frame, index, modules, onLocation }: {
-  frame: DebugSnapshot['frames'][number]; index: number; modules: string[]; onLocation: (span: SourceSpan) => void;
+  frame: DebugSnapshot['frames'][number]; index: number; modules: SourceModule[]; onLocation: (span: SourceSpan) => void;
 }) {
   const context = useContext(Inspector)!;
   const path = `frame/${index}`;
   const open = context.expanded.has(path) || (index === 0 && !context.expanded.has(`${path}/closed`));
-  const source = frame.spans.filter((span) => modules.includes(span.file))
-    .sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine) || (a.endColumn - a.startColumn) - (b.endColumn - b.startColumn));
+  const source = focusedProjectSpans(frame, modules);
+  const saved = frame.fields.find((field) => field.label === 'Saved environment')?.preview;
   return <li className="inspector-frame" data-top={index === 0}>
     <button className="inspector-frame-toggle" type="button" aria-expanded={open} onClick={() => context.toggle(path, index === 0)}>
       <span className="inspector-frame-number">{String(index).padStart(2, '0')}</span>
-      <strong>{frame.kind}</strong>
+      <span className="inspector-frame-title"><strong>{frame.kind}</strong>{frame.summary ? <code>{frame.summary}</code> : null}
+        {saved ? <code className="inspector-saved-preview">{saved}</code> : null}
+      </span>
       {index === 0 ? <span className="inspector-top-tag">top</span> : <span className="inspector-frame-count">{frame.fields.length}</span>}
       {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
     </button>
@@ -159,7 +162,7 @@ function ControlCard({ reference, phase }: { reference: DebugReference | null; p
 }
 
 export function DebuggerInspector({ snapshot, compiler, modules, onLocation }: {
-  snapshot: DebugSnapshot; compiler: BrowserCompiler; modules: string[]; onLocation: (span: SourceSpan) => void;
+  snapshot: DebugSnapshot; compiler: BrowserCompiler; modules: SourceModule[]; onLocation: (span: SourceSpan) => void;
 }) {
   const [expanded, setExpanded] = useState(new Set<string>());
   const cache = useRef({ epoch: -1, entries: new Map<number, Promise<DebugObject>>() });

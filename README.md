@@ -73,14 +73,25 @@ CEK transition. **Next source** (F11) advances to a different mapped expression;
 program and arguments. Toggle source-line breakpoints in the editor gutter or
 the Breakpoints form. Source locations navigate between project modules.
 
+**Back** (Shift+F10) restores the previous CEK state, including its budget,
+traces, environment and continuation frames. It also works after completion or
+failure. Every transition is retained, including those inside Continue/Next
+source batches, within a rolling 10,000-transition window shown in the panel.
+Back/forward navigation uses immutable native checkpoints, not re-execution.
+The live machine remains at the furthest executed state; stepping beyond the
+recorded history resumes it without duplicating traces or charging costs twice.
+
 The inspector exposes the actual control term or returned value, all
 continuation frames, saved/captured environments, constructor fields, partially
 applied builtins, trace messages, and live used/remaining execution budget.
-Environment indices are CEK de Bruijn indices (1 is the newest binding), not
-reconstructed Haskell locals. Expand any value to inspect its full contents;
+Environment names come from lexical binders in the compiled UPLC, with their
+actual CEK de Bruijn indices (1 is newest). Generated names stay generated;
+these are not reconstructed Haskell locals. Expand any value for its full contents;
 large terms are collapsed for readability rather than discarded.
-Bindings use aligned index/type/value columns, and numbered continuation cards
-mark the top frame. Expanded rows stay open while stepping, but their contents
+Bindings use aligned name/type/value columns, and numbered continuation cards
+show pending expressions, partial builtin applications, and saved bindings even
+while collapsed. The current action is displayed above the source location.
+Expanded rows stay open while stepping, but their contents
 are fetched from the current machine state. The two inspectors sit side by side
 in wide panels and stack vertically in narrower panels.
 
@@ -88,7 +99,8 @@ The compiler enables Plinth's `preserve-source-locations` option and writes an
 annotated `.uplc-flat.debug` sidecar alongside each ordinary Flat script.
 Before execution, the debugger erases only the annotations and verifies that
 the encoded term equals the original Flat bytes. It executes upstream
-`SteppableCek.mkCekTrans` with `SrcSpans`, retaining the machine and budget refs
+`SteppableCek.mkCekTrans` with enriched annotations retaining the original
+`SrcSpans`, keeping the machine and budget refs
 inside the existing WASM reactor between requests. It does not replay the
 program or reconstruct source locations from text.
 
@@ -96,6 +108,15 @@ Highlighting uses the compiler's actual ranges. Optimization can merge/remove
 expressions, and generated argument applications or unavailable library source
 may have no project span. Such states remain inspectable and are explicitly
 unmapped. This is debugging optimized UPLC, not a Haskell interpreter.
+Spans introduced at a node take precedence over inherited enclosing-definition
+spans; all original locations remain accessible. The **Fibonacci · recursive
+debugger** example starts with argument 5 and demonstrates both recursive call
+sites, named arguments, saved continuations, and backward stepping.
+In particular, the pinned compiler currently emits the builtin for `Plinth.+`
+without that operator's source span, even with Plinth optimization disabled.
+Nearby variable-use spans do survive. The debugger cannot infer a trustworthy
+operator location from an unannotated builtin; backward stepping does not fix
+this compiler-side annotation limitation.
 Plutarch `Main.main` exports do not include Plinth annotations and cannot use
 this source debugger. Editing/recompiling, switching programs, changing
 arguments, or leaving Debug discards the session; old value references cannot
@@ -115,7 +136,8 @@ CHROME_EXECUTABLE=/path/to/chrome PLINTH_URL=http://localhost:5174 npm run test:
 The browser test exercises exact single steps, granular cross-module spans,
 closure/stack inspection, both branches of a traced program, multiple compiled
 expressions, validator failure, breakpoints, stale references, edits, persistent
-expanded bindings, and responsive column alignment.
+expanded bindings, backward/forward state equality, history eviction, continuation
+beyond the recorded frontier, and responsive column alignment.
 
 ## Local development
 

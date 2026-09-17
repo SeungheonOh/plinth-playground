@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw, Square, StepForward } from 'lucide-react';
+import { Pause, Play, RotateCcw, Square, StepBack, StepForward } from 'lucide-react';
 import type { BrowserCompiler, CekArgument, CompiledProgram, SourceModule } from './compiler-runtime';
-import { type Breakpoint, type DebugSnapshot, type SourceSpan, projectSpans } from './cek-debugger';
+import { type Breakpoint, type DebugSnapshot, type SourceSpan, focusedProjectSpans } from './cek-debugger';
 import { encodeCekArgument } from './cek-arguments';
 import { DebuggerInspector, SourceLink } from './debugger-inspector';
 
@@ -44,9 +44,9 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
   const update = (next: DebugSnapshot) => {
     if (!alive.current) return;
     setSnapshot(next);
-    onLocation(projectSpans(next.spans, modules)[0] ?? null);
+    onLocation(focusedProjectSpans(next, modules)[0] ?? null);
   };
-  const operate = async (mode: 'start' | 'step' | 'source' | 'continue' | 'stop') => {
+  const operate = async (mode: 'start' | 'back' | 'step' | 'source' | 'continue' | 'stop') => {
     if (!compiler || !program || busy) return;
     running.current = true;
     setBusy(true);
@@ -59,6 +59,12 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
         onLocation(null);
         return;
       }
+      if (mode === 'back') {
+        const response = await compiler.debug({ op: 'back', count: 1 });
+        if (!('epoch' in response)) throw new Error('Debugger did not return a machine state');
+        update(response);
+        return;
+      }
       let current = snapshot;
       if (mode === 'start' || !current) {
         const response = await compiler.debug({ op: 'start', filename: program.filename, args: arguments_.map(encodeCekArgument) });
@@ -67,14 +73,14 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
         update(current);
         if (mode === 'start') return;
       }
-      const origin = JSON.stringify(projectSpans(current.spans, modules)[0] ?? null);
+      const origin = JSON.stringify(focusedProjectSpans(current, modules)[0] ?? null);
       do {
         const response = await compiler.debug({ op: 'step', count: mode === 'step' ? 1 : 100, source: mode === 'source', breakpoints: mode === 'step' ? [] : breakpoints });
         if (!('epoch' in response)) throw new Error('Debugger did not return a machine state');
         current = response;
         update(current);
         if (mode === 'step' || current.done) break;
-        const location = projectSpans(current.spans, modules)[0];
+        const location = focusedProjectSpans(current, modules)[0];
         if (current.phase === 'computing' && location &&
           ((mode === 'source' && JSON.stringify(location) !== origin) ||
             breakpoints.some((bp) => bp.file === location.file && location.startLine <= bp.line && bp.line <= location.endLine))) break;
@@ -88,14 +94,19 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
       if (alive.current) { setBusy(false); onBusyChange(false); }
     }
   };
-  const locations = snapshot ? projectSpans(snapshot.spans, modules) : [];
+  const locations = snapshot ? focusedProjectSpans(snapshot, modules) : [];
   const hasMachine = !!snapshot && !snapshot.done;
+  const canGoBack = !!snapshot?.history && snapshot.step > snapshot.history.first;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!['F8', 'F10', 'F11'].includes(event.key)) return;
       event.preventDefault();
       if (event.key === 'F8' && busy) { running.current = false; return; }
+      if (event.key === 'F10' && event.shiftKey) {
+        if (!busy && canGoBack) void operate('back');
+        return;
+      }
       if (busy || !hasMachine) return;
       void operate(event.key === 'F10' ? 'step' : event.key === 'F11' ? 'source' : 'continue');
     };
@@ -108,6 +119,7 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
       <button type="button" disabled={!program?.debugAvailable || !compiler || busy} onClick={() => void operate('start')}>
         {snapshot ? <RotateCcw size={13} /> : <Play size={13} />}{snapshot ? 'Restart' : 'Start debugger'}
       </button>
+      <button type="button" disabled={!canGoBack || busy} title="Shift+F10 · Restore the previous CEK state, budget, and traces" onClick={() => void operate('back')}><StepBack size={13} />Back</button>
       <button type="button" disabled={!hasMachine || busy} title="F10 · Execute exactly one upstream CEK transition" onClick={() => void operate('step')}><StepForward size={13} />Step CEK</button>
       <button type="button" disabled={!hasMachine || busy} title="F11 · Advance to a different mapped expression" onClick={() => void operate('source')}>Next source</button>
       {busy ? <button type="button" onClick={() => { running.current = false; }}><Pause size={13} />Pause</button>
@@ -117,12 +129,17 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
     {error ? <p className="debug-error" role="alert">{error}</p> : null}
     {!snapshot ? <div className="debug-intro">
       <strong>{program ? program.debugAvailable ? 'Step through the compiled Plinth program' : 'No annotated Plinth output' : 'Compile a Plinth program first'}</strong>
-      <p>{program?.debugAvailable ? 'Uses the arguments from Run. Step CEK executes one machine transition; Next source stops at the next mapped expression.' : 'Source debugging requires a PlutusTx.compile output. Plutarch Main.main exports do not carry Plinth source spans.'}</p>
+      <p>{program?.debugAvailable ? 'Uses the arguments from Run. Step CEK advances one machine transition; Back restores the previous state. Next source stops at the next mapped expression.' : 'Source debugging requires a PlutusTx.compile output. Plutarch Main.main exports do not carry Plinth source spans.'}</p>
       <p>Optimizations may merge or remove source expressions. Unmapped steps remain visible as CEK states.</p>
     </div> : <>
       <div className="debug-state-bar" role="status" data-phase={snapshot.phase} data-step={snapshot.step}>
         <strong>Step {snapshot.step.toLocaleString()}</strong><span className="debug-phase">{snapshot.phase}</span><span>{snapshot.frames.length} {snapshot.frames.length === 1 ? 'frame' : 'frames'}</span>
       </div>
+      {snapshot.history ? <div className="debug-history" title={`The most recent ${snapshot.history.limit.toLocaleString()} transitions are retained. History navigation does not rerun code or charge budget.`}>
+        <span>{snapshot.step < snapshot.history.last ? 'Viewing history' : 'Latest state'}</span>
+        <span>Retained steps {snapshot.history.first.toLocaleString()}–{snapshot.history.last.toLocaleString()}</span>
+      </div> : null}
+      {snapshot.action ? <p className="debug-action">{snapshot.action}</p> : null}
       <div className="debug-location">
         <strong>{snapshot.done ? snapshot.failure ? 'Failed at' : 'Finished' : snapshot.phase === 'returning' ? 'Returning to' : 'Next to execute'}</strong>
         {locations.length ? <div className="debug-source-links"><SourceLink span={locations[0]} onLocation={onLocation} />
@@ -138,7 +155,7 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
       </dl>
       {snapshot.failure ? <pre className="debug-error">{snapshot.failure}</pre> : null}
       {snapshot.result ? <section className="debug-section"><h3>Result</h3><pre>{snapshot.result}</pre></section> : null}
-      {compiler ? <DebuggerInspector snapshot={snapshot} compiler={compiler} modules={modules.map((source) => source.name)} onLocation={onLocation} /> : null}
+      {compiler ? <DebuggerInspector snapshot={snapshot} compiler={compiler} modules={modules} onLocation={onLocation} /> : null}
       <section className="debug-section"><h3>Trace log <small>{snapshot.logs.length}</small></h3>
         {snapshot.logs.length ? <ol className="debug-logs">{snapshot.logs.map((log, i) => <li key={i}>{log}</li>)}</ol> : <p>No traces emitted</p>}
       </section>

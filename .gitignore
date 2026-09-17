@@ -44,6 +44,7 @@ next-env.d.ts
 !/compiler-experiment/UplcGhcBrowser.hs
 !/compiler-experiment/DecodeUplc.hs
 !/compiler-experiment/BrowserPlinth.hs
+!/compiler-experiment/BrowserFibonacci.hs
 !/compiler-experiment/BrowserPlinthWithUtils.hs
 !/compiler-experiment/BrowserPlinthMulti.hs
 !/compiler-experiment/BrowserLocalMath.hs

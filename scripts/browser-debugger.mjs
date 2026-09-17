@@ -16,7 +16,14 @@ page.on('pageerror', (error) => errors.push(error.message));
 await page.addInitScript(() => {
   const OriginalWorker = window.Worker;
   window.Worker = class extends OriginalWorker {
-    constructor(...args) { super(...args); window.testCompilerWorker = this; }
+    constructor(...args) {
+      super(...args);
+      window.testCompilerWorker = this;
+      this.addEventListener('message', ({ data }) => {
+        if (data.type === 'compile-result') window.testLastCompilation = data.result;
+        if (data.type === 'debug-result' && 'epoch' in data.result) window.testLastDebugSnapshot = data.result;
+      });
+    }
   };
   let sequence = 100000;
   window.testWorkerRequest = (message) => new Promise((resolve, reject) => {
@@ -35,6 +42,7 @@ await page.addInitScript(() => {
 });
 const request = (message) => page.evaluate((message) => window.testWorkerRequest(message), message);
 const debug = (command) => request({ type: 'debug', command });
+const machineState = ({ epoch, history, ...state }) => state;
 const waitReady = () => page.waitForFunction(() => document.querySelector('.compiler-state')?.textContent.includes('runtime ready'), null, { timeout: 240_000 });
 
 async function compile() {
@@ -53,6 +61,7 @@ async function replaceSource(source) {
 
 async function checkMachine(filename, args, expected) {
   let state = await debug({ op: 'start', filename, args });
+  const recorded = [state];
   assert.equal(state.step, 0);
   let sawFrame = false;
   let sawEnvironment = false;
@@ -67,6 +76,7 @@ async function checkMachine(filename, args, expected) {
   for (let i = 0; i < 400 && !state.done; i++) {
     const old = state;
     state = await debug({ op: 'step', count: 1 });
+    recorded.push(state);
     assert.equal(state.step, old.step + 1, 'Every click must execute exactly one CEK transition');
     if (old.control) await assert.rejects(() => debug({ op: 'inspect', epoch: old.epoch, ref: old.control.ref }), /earlier debugger state/);
     if (state.control) await inspect(state.control, state.epoch);
@@ -82,6 +92,16 @@ async function checkMachine(filename, args, expected) {
   }
   assert.equal(state.done, true);
   assert.ok(sawFrame && sawEnvironment && sawGranular, 'Expected real stack, environment, and expression spans');
+  for (let i = recorded.length - 2; i >= 0; i--) {
+    const back = await debug({ op: 'back', count: 1 });
+    assert.deepEqual(machineState(back), machineState(recorded[i]), `Backward state ${i} must restore the exact budget, traces, control and frames`);
+    if (back.environment) await inspect(back.environment, back.epoch);
+    if (back.control) await inspect(back.control, back.epoch);
+  }
+  for (let i = 1; i < recorded.length; i++) {
+    const forward = await debug({ op: 'step', count: 1 });
+    assert.deepEqual(machineState(forward), machineState(recorded[i]), `Forward history state ${i} must not repeat traces or costs`);
+  }
   const arguments_ = args.map((arg) => ({ kind: arg.split(':')[0], value: arg.slice(arg.indexOf(':') + 1) }));
   const evaluated = await request({ type: 'evaluate', filename, args: arguments_ });
   assert.equal(!state.failure, evaluated.succeeded);
@@ -105,6 +125,15 @@ try {
   await page.getByRole('button', { name: 'Start debugger', exact: true }).click();
   await page.locator('.debug-state-bar[data-step="0"]').waitFor();
   await page.getByRole('button', { name: 'Step CEK', exact: true }).click();
+  await page.locator('.debug-state-bar[data-step="1"]').waitFor();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await page.locator('.debug-state-bar[data-step="0"]').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Back', exact: true }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Step CEK', exact: true }).click();
+  await page.locator('.debug-state-bar[data-step="1"]').waitFor();
+  await page.keyboard.press('Shift+F10');
+  await page.locator('.debug-state-bar[data-step="0"]').waitFor();
+  await page.keyboard.press('F10');
   await page.locator('.debug-state-bar[data-step="1"]').waitFor();
   let highlightedValue = false;
   let inspectedBindings = 0;
@@ -153,6 +182,12 @@ try {
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page.locator('.debug-state-bar[data-phase="terminated"]').waitFor();
   assert.match(await page.locator('.debugger-panel').innerText(), /con integer 42/);
+  const lastStep = Number(await page.locator('.debug-state-bar').getAttribute('data-step'));
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await page.locator(`.debug-state-bar[data-step="${lastStep - 1}"]`).waitFor();
+  await page.locator('.cek-source-highlight').first().waitFor();
+  await page.getByRole('button', { name: 'Step CEK', exact: true }).click();
+  await page.locator('.debug-state-bar[data-phase="terminated"]').waitFor();
   for (const width of [1024, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const overflow = await page.locator('.debugger-panel').evaluate((element) => element.scrollWidth - element.clientWidth);
@@ -197,6 +232,57 @@ main = pure ()`;
   await assert.rejects(() => debug({ op: 'step', count: 1 }), /Start a debugger session first/);
   await assert.rejects(() => debug({ op: 'start', filename: choose.filename, args: ['integer:nope'] }), /Invalid integer/);
 
+  // Real recursive source use-sites, not just a definition named fibonacci.
+  await page.locator('.example-picker select').selectOption('fibonacci');
+  await compile();
+  await page.getByRole('tab', { name: 'Run', exact: true }).click();
+  assert.equal(await page.getByLabel('Argument 1 value', { exact: true }).inputValue(), '5');
+  await page.getByLabel('Argument 1 value', { exact: true }).fill('3');
+  await page.getByRole('tab', { name: 'Debug', exact: true }).click();
+  await page.getByRole('button', { name: 'Start debugger', exact: true }).click();
+  await page.locator('.debug-state-bar[data-step="0"]').waitFor();
+  const callColumns = new Set();
+  let checkedFibonacciLayout = false;
+  for (let i = 0; i < 120; i++) {
+    const before = await page.locator('.debug-state-bar').getAttribute('data-step');
+    await page.getByRole('button', { name: 'Next source', exact: true }).click();
+    await page.waitForFunction((before) => document.querySelector('.debug-state-bar')?.getAttribute('data-step') !== before, before);
+    const current = await page.evaluate(() => window.testLastDebugSnapshot);
+    if (current.done) break;
+    if (current.control?.label !== 'Var fibonacci [2]') continue;
+    await page.waitForFunction(() => !document.querySelector('.debug-inspector .inspector-loading'));
+    const highlights = await page.locator('.cek-source-highlight').evaluateAll((elements) => elements.map((element) => ({ text: element.textContent, line: element.closest('.cm-line').textContent })));
+    assert.ok(highlights.some(({ text, line }) => text === 'fibonacci' && line.includes('otherwise')), 'Highlight recursive use instead of the definition');
+    const focus = current.focusSpans.find((span) => span.file === 'Main.hs');
+    assert.equal(focus.startLine, 16);
+    callColumns.add(focus.startColumn);
+    const bindings = await page.locator('.inspector-bindings > .inspector-node').allTextContents();
+    assert.ok(bindings.some((text) => /n\[1\]integer[23]/.test(text)), 'Show named n and the current recursive argument');
+    assert.ok(bindings.some((text) => text.includes('fibonacci')), 'Name the recursive function binding');
+    assert.match(await page.locator('.inspector-frames').innerText(), /SubtractInteger/);
+    assert.match(await page.locator('.inspector-frames').innerText(), /n =/);
+    if (!checkedFibonacciLayout) {
+      checkedFibonacciLayout = true;
+      await page.screenshot({ path: path.join(output, 'fibonacci-call.png'), fullPage: true });
+      for (const width of [1500, 1024, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        const overflow = await page.locator('.debugger-panel').evaluate(element => element.scrollWidth - element.clientWidth);
+        assert.ok(overflow <= 1, `Fibonacci inspector overflow at ${width}px`);
+        await page.screenshot({ path: path.join(output, `fibonacci-${width}.png`), fullPage: true });
+      }
+      await page.setViewportSize({ width: 1500, height: 1000 });
+      await page.getByRole('button', { name: 'Back', exact: true }).click();
+      await page.locator(`.debug-state-bar[data-step="${current.step - 1}"]`).waitFor();
+      await page.getByRole('button', { name: 'Step CEK', exact: true }).click();
+      await page.locator(`.debug-state-bar[data-step="${current.step}"]`).waitFor();
+      assert.deepEqual(machineState(await page.evaluate(() => window.testLastDebugSnapshot)), machineState(current));
+    }
+  }
+  assert.deepEqual([...callColumns].sort((a, b) => a - b), [17, 51]);
+  await page.locator('.debug-state-bar[data-phase="terminated"]').waitFor();
+  assert.match(await page.locator('.debugger-panel').innerText(), /con integer 2/);
+  console.log('Fibonacci example, both recursive call-site highlights, named arguments, readable saved frames and reverse stepping verified');
+
   // A long-running program must remain pausable between bounded batches,
   // retain its state while paused, and reset completely on restart.
   await page.locator('.example-picker select').selectOption('equality');
@@ -234,6 +320,26 @@ main = pure ()`);
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
   await page.getByRole('button', { name: 'Start debugger', exact: true }).waitFor();
   console.log('Pause, restart, source stepping, keyboard controls, and stop verified');
+
+  // Retain every transition within a bounded history, including those inside
+  // 200-step batches. Traversing it must leave the live frontier untouched.
+  const longProgram = await page.evaluate(() => window.testLastCompilation.programs[0].filename);
+  state = await debug({ op: 'start', filename: longProgram, args: ['integer:1000000'] });
+  for (let i = 0; i < 55; i++) state = await debug({ op: 'step', count: 200 });
+  assert.equal(state.step, 11000);
+  assert.equal(state.history.first, state.step - state.history.limit);
+  const frontier = state;
+  for (let i = 0; i < 51; i++) state = await debug({ op: 'back', count: 200 });
+  assert.equal(state.step, frontier.history.first, 'Back must clamp at the retained boundary');
+  assert.equal(state.history.last, frontier.step, 'Rewinding must not discard the live frontier');
+  for (let i = 0; i < 50; i++) state = await debug({ op: 'step', count: 200 });
+  assert.deepEqual(machineState(state), machineState(frontier));
+  state = await debug({ op: 'step', count: 1 });
+  assert.equal(state.step, frontier.step + 1, 'Continue past history using the original live machine');
+  state = await debug({ op: 'back', count: 1 });
+  assert.deepEqual(machineState(state), machineState(frontier));
+  await debug({ op: 'stop' });
+  console.log('Bounded per-transition history, retained boundary, and live continuation verified');
 
   // Return to UI compilation after protocol checks; edits must clear the
   // current session and source highlighting rather than debug stale code.

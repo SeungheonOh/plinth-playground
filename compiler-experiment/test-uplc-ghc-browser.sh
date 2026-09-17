@@ -24,7 +24,7 @@ cd "$EXPERIMENT_DIR"
 "$WASM_TOOLS" validate evaluate-uplc.wasm
 "$WASM_TOOLS" validate libuplc-ghc-empty.so
 
-MAIN_RUN_OUTPUT=$(BROWSER_DEBUG_TEST=1 node test-uplc-ghc-browser.mjs)
+MAIN_RUN_OUTPUT=$(BROWSER_DEBUG_TEST=1 BROWSER_REVERSE_TEST=1 node test-uplc-ghc-browser.mjs)
 case "$MAIN_RUN_OUTPUT" in
   *"BROWSER_MAIN_RAN"*) ;;
   *)
@@ -111,5 +111,11 @@ BROWSER_PROJECT_PAYLOAD=../app/example-projects.ts \
 BROWSER_EXTRA_ARGS=-package-id=plutus-ledger-api-1.66.0.0-inplace \
   node test-uplc-ghc-browser.mjs
 echo "Bundled two-party escrow example compiled successfully"
+
+BROWSER_SOURCE=BrowserFibonacci.hs BROWSER_DEBUG_TEST=1 \
+  BROWSER_DEBUG_ARGS='["integer:3"]' BROWSER_DEBUG_LIMIT=2000 \
+  BROWSER_CALL_SITE_TEST=1 BROWSER_REVERSE_TEST=1 \
+  node test-uplc-ghc-browser.mjs
+echo "Fibonacci call sites, named bindings, source stepping and reverse history verified"
 
 sha256sum BrowserPlinth.uplc-flat uplc-ghc.wasm libuplc-ghc-browser.so

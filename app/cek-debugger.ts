@@ -5,18 +5,21 @@ export type SourceSpan = {
   endLine: number;
   endColumn: number;
 };
-export type DebugReference = { ref: number; label: string };
-export type DebugObject = { kind: string; text?: string; spans?: SourceSpan[]; children: DebugReference[] };
+export type DebugReference = { ref: number; label: string; preview?: string; name?: string; index?: number };
+export type DebugObject = { kind: string; text?: string; spans?: SourceSpan[]; focusSpans?: SourceSpan[]; children: DebugReference[] };
 export type Breakpoint = { file: string; line: number };
 export type DebugSnapshot = {
   epoch: number;
   step: number;
+  history: { first: number; last: number; limit: number };
   phase: 'starting' | 'computing' | 'returning' | 'terminated' | 'failed';
   done: boolean;
   control: DebugReference | null;
   environment: DebugReference | null;
-  frames: { kind: string; spans: SourceSpan[]; fields: DebugReference[] }[];
+  frames: { kind: string; summary?: string; spans: SourceSpan[]; focusSpans?: SourceSpan[]; fields: DebugReference[] }[];
   spans: SourceSpan[];
+  focusSpans?: SourceSpan[];
+  action?: string;
   budget: { cpu: string; memory: string };
   remaining: { cpu: string; memory: string };
   logs: string[];
@@ -26,6 +29,7 @@ export type DebugSnapshot = {
 export type DebugCommand =
   | { op: 'start'; filename: string; args: string[] }
   | { op: 'step'; count: number; source?: boolean; breakpoints?: Breakpoint[] }
+  | { op: 'back'; count?: number }
   | { op: 'inspect'; epoch: number; ref: number }
   | { op: 'stop' };
 
@@ -56,4 +60,13 @@ export function projectSpans(spans: SourceSpan[], modules: { name: string; sourc
   }).sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine)
     || (a.endColumn - a.startColumn) - (b.endColumn - b.startColumn)
     || a.file.localeCompare(b.file) || a.startLine - b.startLine || a.startColumn - b.startColumn);
+}
+
+// The WASM adapter identifies spans introduced at this node, separately from
+// inherited enclosing spans. Never decide call sites by source-text matching
+// or by arbitrarily reversing the line-number tie-breaker.
+export function focusedProjectSpans(location: { spans: SourceSpan[]; focusSpans?: SourceSpan[] }, modules: { name: string; source: string }[]) {
+  const focus = projectSpans(location.focusSpans ?? [], modules);
+  const seen = new Set(focus.map((span) => JSON.stringify(span)));
+  return [...focus, ...projectSpans(location.spans, modules).filter((span) => !seen.has(JSON.stringify(span)))];
 }

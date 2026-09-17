@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { spanOffsets, projectSpans } from '../app/cek-debugger.ts';
+import { spanOffsets, projectSpans, focusedProjectSpans } from '../app/cek-debugger.ts';
 import { encodeCekArgument } from '../app/cek-arguments.ts';
 
 test('source spans map exact expressions with exclusive end columns', () => {
@@ -34,4 +34,25 @@ test('Run and Debug share exact typed-argument encodings', () => {
   assert.equal(encodeCekArgument({ kind: 'data', value: 'I 42' }), 'data:49203432');
   assert.equal(encodeCekArgument({ kind: 'bool', value: 'TRUE' }), 'bool:true');
   assert.equal(encodeCekArgument({ kind: 'unit', value: '' }), 'unit');
+});
+
+test('node-specific recursive-use spans precede inherited definition spans', () => {
+  const source = 'fibonacci n\n  | otherwise = fibonacci (n - 1) + fibonacci (n - 2)';
+  const definition = { file: 'Main.hs', startLine: 1, endLine: 1, startColumn: 1, endColumn: 10 };
+  const left = { file: 'Main.hs', startLine: 2, endLine: 2, startColumn: 17, endColumn: 26 };
+  const right = { ...left, startColumn: 37, endColumn: 46 };
+  const modules = [{ name: 'Main.hs', source }];
+  for (const call of [left, right]) {
+    assert.deepEqual(focusedProjectSpans({ spans: [definition, call], focusSpans: [call] }, modules), [call, definition]);
+    const range = spanOffsets(source, call);
+    assert.equal(source.slice(range.from, range.to), 'fibonacci');
+  }
+});
+test('generated states stay unmapped and unavailable focused spans safely fall back', () => {
+  const source = 'f x = x';
+  const span = { file: 'Main.hs', startLine: 1, endLine: 1, startColumn: 7, endColumn: 8 };
+  const modules = [{ name: 'Main.hs', source }];
+  assert.deepEqual(focusedProjectSpans({ spans: [], focusSpans: [] }, modules), []);
+  assert.deepEqual(focusedProjectSpans({ spans: [span], focusSpans: [{ ...span, file: 'Library.hs' }] }, modules), [span]);
+  assert.deepEqual(focusedProjectSpans({ spans: [span] }, modules), [span]);
 });
