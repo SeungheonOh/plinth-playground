@@ -1,5 +1,6 @@
 import PlinthCompilerWorker from './compiler.worker.ts?worker';
 import type { OptimizationCertification } from './optimization-certificate';
+import type { DebugCommand, DebugObject, DebugSnapshot } from './cek-debugger';
 
 export type OutputKind = 'stdout' | 'stderr';
 export type OutputListener = (kind: OutputKind, message: string) => void;
@@ -10,6 +11,7 @@ export type CompiledProgram = {
   byteLength: number;
   flatHex: string;
   uplc: string;
+  debugAvailable: boolean;
 };
 
 export type CompileResult = {
@@ -45,6 +47,7 @@ export type CekEvaluationResult = {
 export type BrowserCompiler = {
   compile: (modules: SourceModule[], listener: OutputListener, options?: { certify: boolean }) => Promise<CompileResult>;
   evaluate: (filename: string, args: CekArgument[]) => Promise<CekEvaluationResult>;
+  debug: (command: DebugCommand) => Promise<DebugSnapshot | DebugObject | { stopped: boolean }>;
 };
 
 const PROJECT_BUNDLE_MARKER = 'PLINTH_PROJECT_V1';
@@ -70,6 +73,7 @@ type WorkerEvent =
   | { type: 'output'; requestId: number; kind: OutputKind; message: string }
   | { type: 'compile-result'; requestId: number; result: CompileResult }
   | { type: 'evaluate-result'; requestId: number; result: CekEvaluationResult }
+  | { type: 'debug-result'; requestId: number; result: DebugSnapshot | DebugObject | { stopped: boolean } }
   | { type: 'error'; requestId?: number; message: string };
 
 type PendingCompile = {
@@ -92,6 +96,7 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
     });
     const pending = new Map<number, PendingCompile>();
     const pendingEvaluations = new Map<number, PendingEvaluation>();
+    const pendingDebug = new Map<number, { resolve: (value: DebugSnapshot | DebugObject | { stopped: boolean }) => void; reject: (error: Error) => void }>();
     let nextRequestId = 1;
     let initialized = false;
 
@@ -104,6 +109,13 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
       if (message.type === 'ready') {
         initialized = true;
         resolve({
+          debug(command) {
+            const requestId = nextRequestId++;
+            return new Promise((resolve, reject) => {
+              pendingDebug.set(requestId, { resolve, reject });
+              worker.postMessage({ type: 'debug', requestId, command });
+            });
+          },
           compile(modules, listener, options = { certify: true }) {
             const requestId = nextRequestId++;
             return new Promise<CompileResult>((resolveCompile, rejectCompile) => {
@@ -149,6 +161,12 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
         request?.resolve(message.result);
         return;
       }
+      if (message.type === 'debug-result') {
+        const request = pendingDebug.get(message.requestId);
+        pendingDebug.delete(message.requestId);
+        request?.resolve(message.result);
+        return;
+      }
       if (message.type === 'error') {
         if (message.requestId !== undefined) {
           const request = pending.get(message.requestId);
@@ -157,6 +175,8 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
           pendingEvaluations.delete(message.requestId);
           request?.reject(new Error(message.message));
           evaluation?.reject(new Error(message.message));
+          pendingDebug.get(message.requestId)?.reject(new Error(message.message));
+          pendingDebug.delete(message.requestId);
         } else if (!initialized) {
           reject(new Error(message.message));
         }
@@ -170,6 +190,8 @@ export function loadBrowserCompiler(onProgress: ProgressListener) {
       for (const request of pendingEvaluations.values()) request.reject(error);
       pending.clear();
       pendingEvaluations.clear();
+      for (const request of pendingDebug.values()) request.reject(error);
+      pendingDebug.clear();
     };
   });
 

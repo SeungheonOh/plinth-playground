@@ -16,9 +16,11 @@ import type {
   OutputKind,
 } from './compiler-runtime';
 import { packageOptimizationCertificates, type OptimizationCertification } from './optimization-certificate';
+import type { DebugCommand } from './cek-debugger';
+import { encodeCekArgument } from './cek-arguments';
 
 const RUNTIME = '/runtime';
-const CEK_RUNTIME_VERSION = 'plinth-1.66-bounded-v1';
+const CEK_RUNTIME_VERSION = 'plinth-1.66-debug-v1';
 const CERTIFICATE_DIRECTORY = 'plinth-certificates';
 const CERTIFICATION_FLAGS = [
   `-fplugin-opt=Plinth.Plugin:certify=/tmp/${CERTIFICATE_DIRECTORY}`,
@@ -43,6 +45,7 @@ const PLINTH_FLAGS = [
   '-package=generics-sop',
   '-package=plutarch-browser',
   '-fplugin-opt=Plinth.Plugin:dump-uplc',
+  '-fplugin-opt=Plinth.Plugin:preserve-source-locations',
   '-Wno-missed-extra-shared-lib',
   '-v1',
   '-fno-full-laziness',
@@ -91,6 +94,7 @@ type DynamicLinkerModule = {
     isIserv: boolean;
   }) => Promise<{
     exportFuncs: {
+      uplcCekDebugger: () => Promise<(command: string) => Promise<string>>;
       uplcGhcBrowser: (
         libdir: string,
         packagePath: string,
@@ -101,6 +105,7 @@ type DynamicLinkerModule = {
 
 let activeRequestId: number | null = null;
 let compileFunction: CompileFunction;
+let debugFunction: (command: string) => Promise<string>;
 let decoderModule: WebAssembly.Module;
 let evaluatorModulePromise: Promise<WebAssembly.Module> | null = null;
 let rootfs: PreopenDirectory;
@@ -356,12 +361,6 @@ async function decodeProgram(filename: string) {
   return stdout.join('\n').trim();
 }
 
-function encodeUtf8Hex(value: string) {
-  return [...new TextEncoder().encode(value)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
-
 function decodeUtf8Hex(value: string) {
   if (value.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(value)) {
     throw new Error('The CEK evaluator returned malformed text');
@@ -373,23 +372,6 @@ function decodeUtf8Hex(value: string) {
   return new TextDecoder().decode(bytes);
 }
 
-function encodeArgument(argument: CekArgument) {
-  switch (argument.kind) {
-    case 'unit':
-      return 'unit';
-    case 'integer':
-      return `integer:${argument.value.trim()}`;
-    case 'bool':
-      return `bool:${argument.value.trim().toLowerCase()}`;
-    case 'bytes':
-      return `bytes:${argument.value.trim().replace(/^0x/i, '').replace(/\s/g, '')}`;
-    case 'string':
-      return `string:${encodeUtf8Hex(argument.value)}`;
-    case 'data':
-      return `data:${encodeUtf8Hex(argument.value)}`;
-  }
-}
-
 async function evaluateProgram(filename: string, args: CekArgument[]) {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -398,7 +380,7 @@ async function evaluateProgram(filename: string, args: CekArgument[]) {
   );
   const evaluatorModule = await evaluatorModulePromise;
   const evaluatorWasi = new WASI(
-    ['evaluate-uplc.wasm', filename, ...args.map(encodeArgument)],
+    ['evaluate-uplc.wasm', filename, ...args.map(encodeCekArgument)],
     [],
     [
       new OpenFile(new File(new Uint8Array(), { readonly: true })),
@@ -508,19 +490,34 @@ async function initialize() {
     libdir,
     `${storePackageDb}:${projectPackageDb}:`,
   );
+  debugFunction = await dynamicLinker.exportFuncs.uplcCekDebugger();
   postProgress(100, 'Plinth compiler ready');
   self.postMessage({ type: 'ready' });
 }
 
-self.onmessage = async (event: MessageEvent<
+type Request =
   | { type: 'compile'; requestId: number; project: string; certify: boolean }
   | { type: 'evaluate'; requestId: number; filename: string; args: CekArgument[] }
->) => {
+  | { type: 'debug'; requestId: number; command: DebugCommand };
+
+// All requests share the Haskell RTS/root filesystem. Never overlap an async
+// step or value inspection with another request or a recompilation.
+let requestQueue = Promise.resolve();
+self.onmessage = (event: MessageEvent<Request>) => {
+  requestQueue = requestQueue.then(() => handleRequest(event));
+};
+async function handleRequest(event: MessageEvent<Request>) {
   const { requestId } = event.data;
   activeRequestId = requestId;
   const startedAt = performance.now();
 
   try {
+    if (event.data.type === 'debug') {
+      const result = JSON.parse(await debugFunction(JSON.stringify(event.data.command)));
+      if (result.error) throw new Error(result.error);
+      self.postMessage({ type: 'debug-result', requestId, result });
+      return;
+    }
     if (event.data.type === 'evaluate') {
       const evaluated = await evaluateProgram(event.data.filename, event.data.args);
       const result: CekEvaluationResult = {
@@ -532,6 +529,7 @@ self.onmessage = async (event: MessageEvent<
     }
 
     const { project, certify } = event.data;
+    await debugFunction(JSON.stringify({ op: 'stop' }));
     const temporary = prepareCertificateDirectory();
     const flags = certify ? `${PLINTH_FLAGS} ${CERTIFICATION_FLAGS}` : PLINTH_FLAGS;
     const encodedOutputs = await compileFunction(flags, project);
@@ -546,6 +544,7 @@ self.onmessage = async (event: MessageEvent<
         flatHex,
         byteLength: flatHex.length / 2,
         uplc: await decodeProgram(filename),
+        debugAvailable: rootfs.dir.contents.get(`${filename.replace(/^\.\//, '')}.debug`) instanceof File,
       });
     }
     let certification: OptimizationCertification = {

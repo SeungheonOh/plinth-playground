@@ -1,0 +1,23 @@
+diff --git a/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs b/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs
+--- a/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs
++++ b/plutus-tx-plugin/src/PlutusTx/Plugin/Common.hs
+@@ -881,10 +881,14 @@ runCompiler packageName moduleName opts expr = do
+   dbP <-
+     liftExcept $ modifyError PLC.FreeVariableErrorE $ traverseOf UPLC.progTerm UPLC.deBruijnTerm uplcP
+-  when (opts ^. posDumpUPlc) . liftIO $
+-    dumpFlat
+-      (UPLC.UnrestrictedProgram $ void dbP)
+-      "untyped PLC program"
+-      (moduleName ++ ".uplc-flat")
++  when (opts ^. posDumpUPlc) . liftIO $ do
++    (outputPath, outputHandle) <- openBinaryTempFile "." (moduleName ++ ".uplc-flat")
++    putStrLn $ "!!! dumping untyped PLC program to " ++ show outputPath
++    BS.hPut outputHandle $ flat (UPLC.UnrestrictedProgram $ void dbP)
++    hClose outputHandle
++    -- The debugger executes the same optimized term, retaining its original
++    -- Plinth source annotations. The normal ledger Flat output is unchanged.
++    BS.writeFile (outputPath ++ ".debug") $
++      flat (UPLC.UnrestrictedProgram $ fmap getSrcSpans dbP)
+   -- Discard the Provenance information at this point, just keep the SrcSpans
+   -- TODO: keep it and do something useful with it
+   pure (fmap getSrcSpans spirP, fmap getSrcSpans dbP)

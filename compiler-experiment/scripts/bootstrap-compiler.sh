@@ -180,6 +180,7 @@ clone_pinned \
   "$PLUTUS_REV" \
   "$DEPS_DIR/plutus"
 apply_git_patch "$DEPS_DIR/plutus" "$PATCH_DIR/plutus-dump-close.patch"
+apply_git_patch "$DEPS_DIR/plutus" "$PATCH_DIR/plutus-debug-artifact.patch"
 
 clone_pinned \
   https://github.com/SeungheonOh/plutarch-plutus.git \

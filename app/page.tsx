@@ -49,6 +49,10 @@ import {
 } from './compiler-runtime';
 import { namedDecoderEscrowPayload } from './example-projects';
 import { decodeSharedProject, encodeSharedProject } from './project-share';
+import { DebuggerPanel } from './debugger-panel';
+import { debugEditorExtension } from './debug-editor';
+import { spanOffsets, type SourceSpan, type Breakpoint } from './cek-debugger';
+import { EditorView } from '@codemirror/view';
 
 const multiModuleMain = `{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -253,7 +257,7 @@ const haskellHighlighting = HighlightStyle.define([
 ]);
 
 type RuntimeState = 'loading' | 'ready' | 'compiling' | 'evaluating' | 'error';
-type OutputTab = 'uplc' | 'run' | 'flat' | 'diagnostics';
+type OutputTab = 'uplc' | 'run' | 'debug' | 'flat' | 'diagnostics';
 type ShareState = 'idle' | 'copying' | 'copied' | 'error';
 
 const waitingMessage = `Compile the project to inspect the Untyped Plutus Core emitted by Plinth or Plutarch.
@@ -371,6 +375,10 @@ export default function Home() {
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [result, setResult] = useState<CompileResult | null>(null);
   const [certifyOptimizations, setCertifyOptimizations] = useState(true);
+  const [debugLocation, setDebugLocation] = useState<SourceSpan | null>(null);
+  const [debugBusy, setDebugBusy] = useState(false);
+  const [breakpoints, setBreakpoints] = useState<Breakpoint[]>([]);
+  const sourceView = useRef<EditorView | null>(null);
   const [activeTab, setActiveTab] = useState<OutputTab>('uplc');
   const [activeProgram, setActiveProgram] = useState(0);
   const [arguments_, setArguments] = useState<CekArgument[]>(cloneArguments(examples[0].args));
@@ -396,7 +404,24 @@ export default function Home() {
     [collapsedFolders, modules],
   );
   const program = result?.programs[activeProgram] ?? null;
-  const isBusy = runtimeState === 'loading' || runtimeState === 'compiling' || runtimeState === 'evaluating';
+  const isBusy = debugBusy || runtimeState === 'loading' || runtimeState === 'compiling' || runtimeState === 'evaluating';
+  const activeDebugSpan = activeTab === 'debug' && debugLocation?.file === activeModule ? debugLocation : null;
+  const toggleBreakpoint = useCallback((breakpoint: Breakpoint) => {
+    setBreakpoints((current) => current.some((item) => item.file === breakpoint.file && item.line === breakpoint.line)
+      ? current.filter((item) => item.file !== breakpoint.file || item.line !== breakpoint.line) : [...current, breakpoint]);
+  }, []);
+  const showDebugLocation = useCallback((span: SourceSpan | null) => {
+    setDebugLocation(span);
+    if (span) setActiveModule(span.file);
+  }, []);
+  const debugExtension = useMemo(() => debugEditorExtension(source, activeDebugSpan,
+    breakpoints.filter((bp) => bp.file === activeModule).map((bp) => bp.line),
+    (line) => toggleBreakpoint({ file: activeModule, line })), [source, activeDebugSpan, breakpoints, activeModule, toggleBreakpoint]);
+  useEffect(() => {
+    if (!activeDebugSpan || !sourceView.current) return;
+    const range = spanOffsets(source, activeDebugSpan);
+    if (range) sourceView.current.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'nearest' }) });
+  }, [activeDebugSpan, source]);
 
   useEffect(() => {
     let request = 0;
@@ -478,7 +503,7 @@ export default function Home() {
   }, [isAddingModule]);
 
   const compile = useCallback(async () => {
-    if (!compiler || runtimeState !== 'ready') return;
+    if (!compiler || runtimeState !== 'ready' || debugBusy) return;
     setRuntimeState('compiling');
     setRuntimeDetail('Compiling project');
     setDiagnostics([]);
@@ -510,10 +535,10 @@ export default function Home() {
     } finally {
       setRuntimeState('ready');
     }
-  }, [compiler, modules, runtimeState, certifyOptimizations]);
+  }, [compiler, modules, runtimeState, certifyOptimizations, debugBusy]);
 
   const runEvaluation = useCallback(async () => {
-    if (!compiler || !program || runtimeState !== 'ready') return;
+    if (!compiler || !program || runtimeState !== 'ready' || debugBusy) return;
     setRuntimeState('evaluating');
     setRuntimeDetail('Loading and running the CEK machine');
     setEvaluation(null);
@@ -532,7 +557,7 @@ export default function Home() {
     } finally {
       setRuntimeState('ready');
     }
-  }, [arguments_, compiler, program, runtimeState]);
+  }, [arguments_, compiler, program, runtimeState, debugBusy]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -847,11 +872,11 @@ export default function Home() {
           <a className="icon-button" href="https://github.com/input-output-hk/ghc-plinth/tree/ghc-9.6-plinth" target="_blank" rel="noreferrer" aria-label="Open ghc-plinth on GitHub">
             <ExternalLink size={15} />
           </a>
-          <button className="secondary-button" type="button" disabled={!program || runtimeState !== 'ready'} onClick={() => void runEvaluation()}>
+          <button className="secondary-button" type="button" disabled={!program || isBusy || runtimeState !== 'ready'} onClick={() => void runEvaluation()}>
             {runtimeState === 'evaluating' ? <LoaderCircle size={14} /> : <Play size={14} />}
             Run CEK
           </button>
-          <button className="primary-button" type="button" disabled={runtimeState !== 'ready'} onClick={() => void compile()}>
+          <button className="primary-button" type="button" disabled={isBusy || runtimeState !== 'ready'} onClick={() => void compile()}>
             {runtimeState === 'compiling' ? <LoaderCircle size={14} /> : <Hammer size={14} />}
             Compile
             <kbd>⌘↵</kbd>
@@ -989,10 +1014,17 @@ export default function Home() {
                 aria-label={`${activeModule} Haskell source`}
                 basicSetup
                 className="source-editor"
-                extensions={[haskellLanguage, syntaxHighlighting(haskellHighlighting)]}
+                extensions={[haskellLanguage, syntaxHighlighting(haskellHighlighting), debugExtension]}
                 height="100%"
                 key={activeModule}
                 onChange={changeSource}
+                onCreateEditor={(view) => {
+                  sourceView.current = view;
+                  if (activeDebugSpan) {
+                    const range = spanOffsets(source, activeDebugSpan);
+                    if (range) view.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'nearest' }) });
+                  }
+                }}
                 placeholder="Write a Plinth module…"
                 theme="light"
                 value={source}
@@ -1035,9 +1067,9 @@ export default function Home() {
         <section className="result-pane">
           <header className="pane-toolbar result-toolbar">
             <div className="result-tabs" role="tablist" aria-label="Compiler and evaluator output">
-              {(['uplc', 'run', 'flat', 'diagnostics'] as const).map((tab) => (
+              {(['uplc', 'run', 'debug', 'flat', 'diagnostics'] as const).map((tab) => (
                 <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} onClick={() => setActiveTab(tab)}>
-                  {tab === 'uplc' ? 'UPLC' : tab === 'run' ? 'Run' : tab === 'flat' ? 'Flat' : 'Diagnostics'}
+                  {tab === 'uplc' ? 'UPLC' : tab === 'run' ? 'Run' : tab === 'debug' ? 'Debug' : tab === 'flat' ? 'Flat' : 'Diagnostics'}
                   {tab === 'diagnostics' && diagnostics.length > 0 ? <small>{diagnostics.length}</small> : null}
                 </button>
               ))}
@@ -1093,7 +1125,19 @@ export default function Home() {
             </div>
           ) : null}
 
-          {activeTab === 'run' ? (
+          {activeTab === 'debug' ? (
+            <DebuggerPanel
+              key={`${program?.filename}:${result?.elapsedMs}:${JSON.stringify(arguments_)}:${JSON.stringify(modules)}`}
+              compiler={compiler}
+              program={program}
+              arguments_={arguments_}
+              modules={modules}
+              breakpoints={breakpoints}
+              onToggleBreakpoint={toggleBreakpoint}
+              onLocation={showDebugLocation}
+              onBusyChange={setDebugBusy}
+            />
+          ) : activeTab === 'run' ? (
             <div className="run-workspace">
               <section className="argument-panel" aria-label="CEK arguments">
                 <header className="section-heading">
@@ -1143,7 +1187,7 @@ export default function Home() {
 
                 <div className="run-actions">
                   <span>{program ? `${program.byteLength.toLocaleString()} byte Flat program` : 'Compile a program before running it'}</span>
-                  <button className="run-button" type="button" disabled={!program || runtimeState !== 'ready'} onClick={() => void runEvaluation()}>
+                  <button className="run-button" type="button" disabled={!program || isBusy || runtimeState !== 'ready'} onClick={() => void runEvaluation()}>
                     {runtimeState === 'evaluating' ? <LoaderCircle size={14} /> : <Play size={14} />}
                     Run CEK machine
                   </button>

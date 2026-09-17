@@ -140,6 +140,7 @@ for (const [projectIndex, modules] of projects.entries()) {
       "-package=plutus-tx",
       ...extraArgs,
       "-fplugin-opt=Plinth.Plugin:dump-uplc",
+      "-fplugin-opt=Plinth.Plugin:preserve-source-locations",
       "-Wno-missed-extra-shared-lib",
       "-v1",
       "-fno-full-laziness",
@@ -171,6 +172,29 @@ for (const [projectIndex, modules] of projects.entries()) {
       throw new Error(`Invalid compiler output record: ${output}`);
     }
     const bytes = Buffer.from(hex, "hex");
+    if (process.env.BROWSER_DEBUG_TEST === '1') {
+      const debug = await linker.exportFuncs.uplcCekDebugger();
+      const send = async (command) => {
+        const result = JSON.parse(await debug(JSON.stringify(command)));
+        if (result.error) throw new Error(result.error);
+        return result;
+      };
+      let snapshot = await send({ op: 'start', filename, args: ['integer:41'] });
+      const observedSpans = [];
+      if (snapshot.step !== 0) throw new Error('Debugger did not start at step 0');
+      for (let i = 0; i < 200 && !snapshot.done; i++) {
+        const next = await send({ op: 'step', count: 1 });
+        if (next.step !== snapshot.step + 1) throw new Error('Skipped CEK transition');
+        snapshot = next;
+        observedSpans.push(...snapshot.spans);
+        if (snapshot.environment) await send({ op: 'inspect', epoch: snapshot.epoch, ref: snapshot.environment.ref });
+      }
+      if (!snapshot.done || snapshot.failure) throw new Error('Debugger did not terminate successfully');
+      console.log('DEBUG RESULT', JSON.stringify({ steps: snapshot.step, result: snapshot.result, budget: snapshot.budget, spans: observedSpans }));
+      if (sourceFile === 'BrowserPlinth.hs' && !observedSpans.some((span) => span.file === 'Main.hs' && span.startLine === 11 && span.startColumn === 12 && span.endColumn === 13)) {
+        throw new Error('Missing granular span for x at Main.hs:11:12–11:13');
+      }
+    }
     if (bytes.length === 0) {
       throw new Error(`Compiler emitted an empty UPLC program: ${filename}`);
     }

@@ -1,8 +1,9 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 
-module UplcGhcBrowser (uplcGhcBrowser) where
+module UplcGhcBrowser (uplcGhcBrowser, uplcCekDebugger) where
 
+import BrowserDebugger (newDebugger)
 import Control.Monad (forM, forM_, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Coerce (coerce)
@@ -237,7 +238,7 @@ projectArtifacts path =
 
 removePreviousOutputs :: IO ()
 removePreviousOutputs = do
-  outputs <- filter isBrowserOutput <$> listDirectory "."
+  outputs <- filter (\path -> isBrowserOutput path || ".uplc-flat.debug" `isSuffixOf` path) <$> listDirectory "."
   mapM_ removeFile outputs
 
 collectOutputs :: IO String
@@ -282,6 +283,21 @@ foreign import javascript "wrapper"
   toCompileFunction ::
     CompileFunction ->
     IO (JSFunction CompileFunction)
+
+uplcCekDebugger :: IO (JSFunction (JSString -> IO JSString))
+uplcCekDebugger = do
+  debugger <- newDebugger
+  toDebugFunction $ \jsCommand -> do
+    command <- evaluate $ fromJSString jsCommand
+    _ <- evaluate $ forceString command
+    freeJSVal $ coerce jsCommand
+    toJSString <$> debugger command
+
+foreign import javascript "wrapper"
+  toDebugFunction :: (JSString -> IO JSString) -> IO (JSFunction (JSString -> IO JSString))
+
+foreign export javascript "uplcCekDebugger"
+  uplcCekDebugger :: IO (JSFunction (JSString -> IO JSString))
 
 foreign export javascript "uplcGhcBrowser"
   uplcGhcBrowser ::

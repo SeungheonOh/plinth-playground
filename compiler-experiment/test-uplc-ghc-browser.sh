@@ -24,7 +24,7 @@ cd "$EXPERIMENT_DIR"
 "$WASM_TOOLS" validate evaluate-uplc.wasm
 "$WASM_TOOLS" validate libuplc-ghc-empty.so
 
-MAIN_RUN_OUTPUT=$(node test-uplc-ghc-browser.mjs)
+MAIN_RUN_OUTPUT=$(BROWSER_DEBUG_TEST=1 node test-uplc-ghc-browser.mjs)
 case "$MAIN_RUN_OUTPUT" in
   *"BROWSER_MAIN_RAN"*) ;;
   *)

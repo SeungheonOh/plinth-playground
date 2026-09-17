@@ -60,6 +60,7 @@ install -m 0644 "$UPLC_GHC" "$EXPERIMENT_DIR/uplc-ghc.wasm"
 
 # Build the browser-facing GHC API reactor used with GHC's dyld.mjs runtime.
 wasm32-wasi-ghc -v0 -shared -dynamic -O1 \
+  -hide-all-packages -package=base -package=directory -package=ghc-experimental \
   -package-db="$STORE_PACKAGE_DB" \
   -package-db="$PROJECT_PACKAGE_DB" \
   -package=ghc \
@@ -68,6 +69,12 @@ wasm32-wasi-ghc -v0 -shared -dynamic -O1 \
   -package=filepath \
   -package=text \
   -package=plutus-tx-plugin \
+  -package-id=plutus-core-1.66.0.0-inplace \
+  -package-id=plutus-core-1.66.0.0-inplace-flat \
+  -package-id=plutus-core-1.66.0.0-inplace-satint \
+  -package-id=plutus-core-1.66.0.0-inplace-index-envs \
+  -package=aeson -package=containers -package=mtl -package=primitive \
+  -i../wasm/cek-evaluator \
   -no-keep-hi-files \
   -no-keep-o-files \
   UplcGhcBrowser.hs \
@@ -100,6 +107,7 @@ wasm32-wasi-ghc -v0 -O1 -hide-all-packages \
   -no-keep-hi-files \
   -no-keep-o-files \
   ../wasm/cek-evaluator/Main.hs \
+  -i../wasm/cek-evaluator \
   -o evaluate-uplc.wasm
 
 # GHCi asks for two optional native libraries whose symbols this compile path

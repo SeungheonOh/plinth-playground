@@ -39,8 +39,36 @@ jobs:
       - name: Test certificate downloads
         run: npm run test:certificates
 
+      - name: Test debugger source mapping
+        run: npm run test:debugger
+
       - name: Build
         run: npm run build
+
+      - name: Install test browser
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Test real WASM debugger and certificate downloads
+        env:
+          PLINTH_URL: http://127.0.0.1:5174/
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 5174 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl --silent --fail "$PLINTH_URL" > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run test:debugger:browser
+          npm run test:certificates:browser
+
+      - name: Upload failed browser checks
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-checks
+          path: /tmp/plinth-*-browser-*
+          if-no-files-found: ignore
 
       - name: Validate Cloudflare deployment
         run: npx wrangler deploy --dry-run

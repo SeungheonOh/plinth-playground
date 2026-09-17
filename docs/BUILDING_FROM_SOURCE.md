@@ -22,7 +22,7 @@ Allow approximately:
 - 16 GB RAM; 32 GB is more comfortable during the Cabal build;
 - 30–50 GB free disk space for the toolchain, Cabal store, sources, and build
   tree;
-- 150 MB for the final compressed browser filesystem;
+- 185 MB for the final compressed browser filesystem;
 - 30–120 minutes for a cold build, depending on CPU and network speed.
 
 Install these host tools:
@@ -149,6 +149,7 @@ All local changes to upstream source are stored in
 | --- | --- |
 | `ghc-main-plinth.patch` | Statically registers `Plinth.Plugin` in the GHC command-line driver. A browser cannot discover and load an arbitrary native plugin DLL. |
 | `plutus-dump-close.patch` | Closes Flat dump handles before the browser wrapper immediately reads the generated file. |
+| `plutus-debug-artifact.patch` | Writes a matching Flat sidecar retaining the optimized program's `SrcSpans`; ordinary ledger output and CEK rules are unchanged. |
 | `plutarch-plutus-1.66.patch` | Aligns Plutarch's exact `plutus-core` constraint with the pinned Plinth 1.66 source tree. |
 | `libsodium-wasi.patch` | Uses the package version required by Plinth and disables an unavailable WASI system header. |
 | `ram-wasi.patch` | Selects little-endian WASI and links the emulated `mman` library. |
@@ -173,7 +174,7 @@ artifacts.
 | Artifact | Role |
 | --- | --- |
 | `uplc-ghc.wasm` | Complete GHC command-line driver with the real Plinth plugin linked in. It is retained as an auditable standalone build product. |
-| `libuplc-ghc-browser.so` | Dynamically linked GHC reactor loaded by `dyld.mjs` in the Web Worker. This is the compiler the website invokes. |
+| `libuplc-ghc-browser.so` | Dynamically linked GHC reactor loaded by `dyld.mjs` in the Web Worker, including the persistent `uplcCekDebugger` entry point. |
 | `decode-uplc.wasm` | Independent decoder for Flat-encoded UPLC. |
 | `evaluate-uplc.wasm` | Plinth's CEK evaluator with typed argument application, traces, and a restricting budget. |
 | `libuplc-ghc-empty.so` | Empty shared-object shim for optional native libraries probed by GHCi but unused by this path. |

@@ -64,6 +64,59 @@ It checks multiple modules and compile splices, a nontrivial optimization proof,
 CEK execution, ZIP downloads, stale/failed-build handling, opting out, Plutarch
 exports, and desktop/mobile layout.
 
+## Source-level CEK debugger
+
+Compile Plinth code, set arguments in **Run**, then open **Debug** and choose
+**Start debugger**. **Step CEK** (F10) advances exactly one upstream steppable
+CEK transition. **Next source** (F11) advances to a different mapped expression;
+**Continue/Pause** (F8) runs bounded batches. Restart uses the same compiled
+program and arguments. Toggle source-line breakpoints in the editor gutter or
+the Breakpoints form. Source locations navigate between project modules.
+
+The inspector exposes the actual control term or returned value, all
+continuation frames, saved/captured environments, constructor fields, partially
+applied builtins, trace messages, and live used/remaining execution budget.
+Environment indices are CEK de Bruijn indices (1 is the newest binding), not
+reconstructed Haskell locals. Expand any value to inspect its full contents;
+large terms are collapsed for readability rather than discarded.
+Bindings use aligned index/type/value columns, and numbered continuation cards
+mark the top frame. Expanded rows stay open while stepping, but their contents
+are fetched from the current machine state. The two inspectors sit side by side
+in wide panels and stack vertically in narrower panels.
+
+The compiler enables Plinth's `preserve-source-locations` option and writes an
+annotated `.uplc-flat.debug` sidecar alongside each ordinary Flat script.
+Before execution, the debugger erases only the annotations and verifies that
+the encoded term equals the original Flat bytes. It executes upstream
+`SteppableCek.mkCekTrans` with `SrcSpans`, retaining the machine and budget refs
+inside the existing WASM reactor between requests. It does not replay the
+program or reconstruct source locations from text.
+
+Highlighting uses the compiler's actual ranges. Optimization can merge/remove
+expressions, and generated argument applications or unavailable library source
+may have no project span. Such states remain inspectable and are explicitly
+unmapped. This is debugging optimized UPLC, not a Haskell interpreter.
+Plutarch `Main.main` exports do not include Plinth annotations and cannot use
+this source debugger. Editing/recompiling, switching programs, changing
+arguments, or leaving Debug discards the session; old value references cannot
+be reused in a later state.
+
+The debugger uses the same default cost model and 15 billion CPU / 40 million
+memory limits as Run, with immediate accounting (`nilSlippage`). Successful
+results, logs, and budgets are compared against the normal evaluator in browser
+tests. On early failure, immediate accounting can include pending machine costs
+that the normal evaluator has not yet charged in its batching optimization.
+
+```sh
+npm run test:debugger
+CHROME_EXECUTABLE=/path/to/chrome PLINTH_URL=http://localhost:5174 npm run test:debugger:browser
+```
+
+The browser test exercises exact single steps, granular cross-module spans,
+closure/stack inspection, both branches of a traced program, multiple compiled
+expressions, validator failure, breakpoints, stale references, edits, persistent
+expanded bindings, and responsive column alignment.
+
 ## Local development
 
 ```sh
@@ -71,7 +124,7 @@ npm ci
 npm run dev
 ```
 
-The first browser load downloads roughly 150 MB of compiler files from
+The first browser load downloads roughly 185 MB of compiler files from
 `public/runtime`. The 10 MB CEK evaluator is loaded lazily on the first run.
 Compiler files are split into chunks small enough for normal Git and Cloudflare
 asset uploads.
