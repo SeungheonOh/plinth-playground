@@ -253,6 +253,7 @@ main = pure ()`;
     await page.waitForFunction(() => !document.querySelector('.debug-inspector .inspector-loading'));
     const highlights = await page.locator('.cek-source-highlight').evaluateAll((elements) => elements.map((element) => ({ text: element.textContent, line: element.closest('.cm-line').textContent })));
     assert.ok(highlights.some(({ text, line }) => text === 'fibonacci' && line.includes('otherwise')), 'Highlight recursive use instead of the definition');
+    assert.ok(highlights.some(({ text, line }) => text === 'fibonacci' && line.trim() === 'fibonacci n'), 'Also highlight the available definition span, not only the chosen call site');
     const focus = current.focusSpans.find((span) => span.file === 'Main.hs');
     assert.equal(focus.startLine, 16);
     callColumns.add(focus.startColumn);
@@ -263,6 +264,8 @@ main = pure ()`;
     assert.match(await page.locator('.inspector-frames').innerText(), /n =/);
     if (!checkedFibonacciLayout) {
       checkedFibonacciLayout = true;
+      await page.locator('.debug-source-links > button').first().click();
+      assert.ok((await page.locator('.cek-source-highlight').allTextContents()).filter(text => text === 'fibonacci').length >= 2, 'Navigating to another available span must not remove the other highlights');
       await page.screenshot({ path: path.join(output, 'fibonacci-call.png'), fullPage: true });
       for (const width of [1500, 1024, 390]) {
         await page.setViewportSize({ width, height: 1000 });
@@ -282,6 +285,37 @@ main = pure ()`;
   await page.locator('.debug-state-bar[data-phase="terminated"]').waitFor();
   assert.match(await page.locator('.debugger-panel').innerText(), /con integer 2/);
   console.log('Fibonacci example, both recursive call-site highlights, named arguments, readable saved frames and reverse stepping verified');
+
+  // Check every CEK transition, not only Next source stops: even an unannotated
+  // builtin must display all available continuation spans. Verify actual marks.
+  await page.waitForFunction(() => document.querySelectorAll('.cm-content .cm-line').length === 19);
+  const lines = await page.locator('.cm-content .cm-line').allTextContents();
+  assert.equal(lines.length, 19, 'The short fixture must be fully visible for exact offset checks');
+  const offset = (line, column) => lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0) + column - 1;
+  await page.getByRole('button', { name: 'Restart', exact: true }).click();
+  await page.locator('.debug-state-bar[data-step="0"]').waitFor();
+  let contextOnly = 0;
+  let multipleSpans = 0;
+  for (let step = 1; step <= 300; step++) {
+    await page.getByRole('button', { name: 'Step CEK', exact: true }).click();
+    await page.locator(`.debug-state-bar[data-step="${step}"]`).waitFor();
+    const current = await page.evaluate(() => window.testLastDebugSnapshot);
+    const spans = [...current.spans, ...current.frames.flatMap(frame => frame.spans)].filter(span => span.file === 'Main.hs');
+    const expected = spans.map(span => ({ from: offset(span.startLine, span.startColumn), to: offset(span.endLine, span.endColumn) }));
+    await page.waitForFunction(expected => {
+      const marks = [...document.querySelectorAll('.cek-source-highlight')].map(element => ({ from: Number(element.dataset.sourceFrom), to: Number(element.dataset.sourceTo) }));
+      return expected.length ? expected.every(span => marks.some(mark => mark.from <= span.from && mark.to >= span.to)) : marks.length === 0;
+    }, expected);
+    if (!current.spans.some(span => span.file === 'Main.hs') && expected.length) {
+      contextOnly++;
+      if (contextOnly === 1) await page.screenshot({ path: path.join(output, 'continuation-source-spans.png'), fullPage: true });
+    }
+    if (new Set(expected.map(span => `${span.from}:${span.to}`)).size > 1) multipleSpans++;
+    if (current.done) break;
+  }
+  assert.ok(contextOnly > 0 && multipleSpans > 0, 'Exercise both context-only states and simultaneous spans');
+  await page.locator('.debug-state-bar[data-phase="terminated"]').waitFor();
+  console.log('Every available state/frame span painted at every Fibonacci CEK step:', { contextOnly, multipleSpans });
 
   // A long-running program must remain pausable between bounded batches,
   // retain its state while paused, and reset completely on restart.

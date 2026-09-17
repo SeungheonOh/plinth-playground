@@ -108,8 +108,12 @@ Highlighting uses the compiler's actual ranges. Optimization can merge/remove
 expressions, and generated argument applications or unavailable library source
 may have no project span. Such states remain inspectable and are explicitly
 unmapped. This is debugging optimized UPLC, not a Haskell interpreter.
-Spans introduced at a node take precedence over inherited enclosing-definition
-spans; all original locations remain accessible. The **Fibonacci · recursive
+Every available project span on the current CEK state and continuation frames
+is highlighted together, including inherited definitions. Spans introduced at a
+node choose the scroll target and Next source stops, but never filter the
+highlights. Overlaps are merged; source links stay visible. Unannotated control
+terms still show any continuation spans. No source is invented or carried over
+from a different machine state. The **Fibonacci · recursive
 debugger** example starts with argument 5 and demonstrates both recursive call
 sites, named arguments, saved continuations, and backward stepping.
 In particular, the pinned compiler currently emits the builtin for `Plinth.+`

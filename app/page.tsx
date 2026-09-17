@@ -400,6 +400,7 @@ export default function Home() {
   const [result, setResult] = useState<CompileResult | null>(null);
   const [certifyOptimizations, setCertifyOptimizations] = useState(true);
   const [debugLocation, setDebugLocation] = useState<SourceSpan | null>(null);
+  const [debugSpans, setDebugSpans] = useState<SourceSpan[]>([]);
   const [debugBusy, setDebugBusy] = useState(false);
   const [breakpoints, setBreakpoints] = useState<Breakpoint[]>([]);
   const sourceView = useRef<EditorView | null>(null);
@@ -430,6 +431,7 @@ export default function Home() {
   const program = result?.programs[activeProgram] ?? null;
   const isBusy = debugBusy || runtimeState === 'loading' || runtimeState === 'compiling' || runtimeState === 'evaluating';
   const activeDebugSpan = activeTab === 'debug' && debugLocation?.file === activeModule ? debugLocation : null;
+  const activeDebugSpans = useMemo(() => activeTab === 'debug' ? debugSpans.filter((span) => span.file === activeModule) : [], [activeTab, debugSpans, activeModule]);
   const toggleBreakpoint = useCallback((breakpoint: Breakpoint) => {
     setBreakpoints((current) => current.some((item) => item.file === breakpoint.file && item.line === breakpoint.line)
       ? current.filter((item) => item.file !== breakpoint.file || item.line !== breakpoint.line) : [...current, breakpoint]);
@@ -438,9 +440,9 @@ export default function Home() {
     setDebugLocation(span);
     if (span) setActiveModule(span.file);
   }, []);
-  const debugExtension = useMemo(() => debugEditorExtension(source, activeDebugSpan,
+  const debugExtension = useMemo(() => debugEditorExtension(source, activeDebugSpans,
     breakpoints.filter((bp) => bp.file === activeModule).map((bp) => bp.line),
-    (line) => toggleBreakpoint({ file: activeModule, line })), [source, activeDebugSpan, breakpoints, activeModule, toggleBreakpoint]);
+    (line) => toggleBreakpoint({ file: activeModule, line })), [source, activeDebugSpans, breakpoints, activeModule, toggleBreakpoint]);
   useEffect(() => {
     if (!activeDebugSpan || !sourceView.current) return;
     const range = spanOffsets(source, activeDebugSpan);
@@ -1159,6 +1161,7 @@ export default function Home() {
               breakpoints={breakpoints}
               onToggleBreakpoint={toggleBreakpoint}
               onLocation={showDebugLocation}
+              onSpans={setDebugSpans}
               onBusyChange={setDebugBusy}
             />
           ) : activeTab === 'run' ? (

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { spanOffsets, projectSpans, focusedProjectSpans } from '../app/cek-debugger.ts';
+import { spanOffsets, projectSpans, focusedProjectSpans, debugSourceSpans, sourceHighlightRanges } from '../app/cek-debugger.ts';
 import { encodeCekArgument } from '../app/cek-arguments.ts';
 
 test('source spans map exact expressions with exclusive end columns', () => {
@@ -55,4 +55,27 @@ test('generated states stay unmapped and unavailable focused spans safely fall b
   assert.deepEqual(focusedProjectSpans({ spans: [], focusSpans: [] }, modules), []);
   assert.deepEqual(focusedProjectSpans({ spans: [span], focusSpans: [{ ...span, file: 'Library.hs' }] }, modules), [span]);
   assert.deepEqual(focusedProjectSpans({ spans: [span] }, modules), [span]);
+});
+
+test('highlight every state and continuation span, across modules, without duplicates', () => {
+  const modules = [{ name: 'Main.hs', source: 'f x = g x' }, { name: 'Helper.hs', source: 'g y = y' }];
+  const definition = { file: 'Main.hs', startLine: 1, endLine: 1, startColumn: 1, endColumn: 2 };
+  const call = { ...definition, startColumn: 7, endColumn: 8 };
+  const saved = { ...definition, file: 'Helper.hs' };
+  const spans = debugSourceSpans({ spans: [definition, call], frames: [{ spans: [definition, saved] }, { spans: [saved, { ...saved, file: 'Unavailable.hs' }] }] }, modules);
+  assert.equal(spans.length, 3);
+  for (const span of [definition, call, saved]) assert.ok(spans.some((actual) => JSON.stringify(actual) === JSON.stringify(span)));
+  assert.deepEqual(debugSourceSpans({ spans: [], frames: [{ spans: [saved] }] }, modules), [saved], 'An unannotated control still shows its saved continuation source');
+  assert.deepEqual(debugSourceSpans({ spans: [], frames: [] }, modules), [], 'Never carry stale highlights into an unrelated state');
+});
+test('render disjoint spans together and merge overlaps without losing covered text', () => {
+  const source = 'fibonacci n\n  | otherwise = fibonacci (n - 1)';
+  const definition = { file: 'Main.hs', startLine: 1, endLine: 1, startColumn: 1, endColumn: 10 };
+  const call = { ...definition, startLine: 2, endLine: 2, startColumn: 17, endColumn: 26 };
+  assert.deepEqual(sourceHighlightRanges(source, [call, definition, call]).map(({ from, to }) => source.slice(from, to)), ['fibonacci', 'fibonacci']);
+  assert.deepEqual(sourceHighlightRanges(source, [definition, { ...definition, startColumn: 5, endColumn: 12 }]), [{ from: 0, to: 11 }]);
+  const multiline = { ...definition, startColumn: 11, endLine: 2, endColumn: 4 };
+  assert.deepEqual(sourceHighlightRanges(source, [definition, multiline]), [{ from: 0, to: 9 }, { from: 10, to: 15 }]);
+  assert.deepEqual(sourceHighlightRanges(source, [{ ...call, endLine: 90 }]), []);
+  assert.deepEqual(sourceHighlightRanges(source, []), []);
 });

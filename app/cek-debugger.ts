@@ -70,3 +70,30 @@ export function focusedProjectSpans(location: { spans: SourceSpan[]; focusSpans?
   const seen = new Set(focus.map((span) => JSON.stringify(span)));
   return [...focus, ...projectSpans(location.spans, modules).filter((span) => !seen.has(JSON.stringify(span)))];
 }
+
+// Display every location carried by the current state and its continuation.
+// Focused spans are only for navigation/source stepping, never a paint filter.
+export function debugSourceSpans(snapshot: Pick<DebugSnapshot, 'spans' | 'frames'>, modules: { name: string; source: string }[]) {
+  const seen = new Set<string>();
+  return projectSpans([...snapshot.spans, ...snapshot.frames.flatMap((frame) => frame.spans)], modules).filter((span) => {
+    const key = JSON.stringify([span.file, span.startLine, span.startColumn, span.endLine, span.endColumn]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Union overlapping ranges to avoid nested marks obscuring one another.
+// Invalid spans are rejected, never clamped to unrelated text.
+export function sourceHighlightRanges(source: string, spans: SourceSpan[]) {
+  const ranges = spans.map((span) => spanOffsets(source, span))
+    .filter((range): range is { from: number; to: number } => range !== null)
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: { from: number; to: number }[] = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range.from <= previous.to) previous.to = Math.max(previous.to, range.to);
+    else merged.push({ ...range });
+  }
+  return merged;
+}

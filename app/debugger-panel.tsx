@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw, Square, StepBack, StepForward } from 'lucide-react';
 import type { BrowserCompiler, CekArgument, CompiledProgram, SourceModule } from './compiler-runtime';
-import { type Breakpoint, type DebugSnapshot, type SourceSpan, focusedProjectSpans } from './cek-debugger';
+import { type Breakpoint, type DebugSnapshot, type SourceSpan, focusedProjectSpans, debugSourceSpans } from './cek-debugger';
 import { encodeCekArgument } from './cek-arguments';
 import { DebuggerInspector, SourceLink } from './debugger-inspector';
 
@@ -11,7 +11,7 @@ function spanLabel(span: SourceSpan) {
   return `${span.file}:${span.startLine}:${span.startColumn}–${span.endLine}:${span.endColumn}`;
 }
 
-export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoints, onToggleBreakpoint, onLocation, onBusyChange }: {
+export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoints, onToggleBreakpoint, onLocation, onSpans, onBusyChange }: {
   compiler: BrowserCompiler | null;
   program?: CompiledProgram | null;
   arguments_: CekArgument[];
@@ -19,6 +19,7 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
   breakpoints: Breakpoint[];
   onToggleBreakpoint: (breakpoint: Breakpoint) => void;
   onLocation: (span: SourceSpan | null) => void;
+  onSpans: (spans: SourceSpan[]) => void;
   onBusyChange: (busy: boolean) => void;
 }) {
   const [snapshot, setSnapshot] = useState<DebugSnapshot | null>(null);
@@ -28,14 +29,15 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
   const [breakLine, setBreakLine] = useState('1');
   const running = useRef(false);
   const alive = useRef(true);
-  const callbacks = useRef({ onLocation, onBusyChange });
-  useEffect(() => { callbacks.current = { onLocation, onBusyChange }; }, [onLocation, onBusyChange]);
+  const callbacks = useRef({ onLocation, onSpans, onBusyChange });
+  useEffect(() => { callbacks.current = { onLocation, onSpans, onBusyChange }; }, [onLocation, onSpans, onBusyChange]);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
       running.current = false;
       callbacks.current.onLocation(null);
+      callbacks.current.onSpans([]);
       callbacks.current.onBusyChange(false);
       void compiler?.debug({ op: 'stop' }).catch(() => {});
     };
@@ -44,7 +46,9 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
   const update = (next: DebugSnapshot) => {
     if (!alive.current) return;
     setSnapshot(next);
-    onLocation(focusedProjectSpans(next, modules)[0] ?? null);
+    const spans = debugSourceSpans(next, modules);
+    onSpans(spans);
+    onLocation(focusedProjectSpans(next, modules)[0] ?? spans[0] ?? null);
   };
   const operate = async (mode: 'start' | 'back' | 'step' | 'source' | 'continue' | 'stop') => {
     if (!compiler || !program || busy) return;
@@ -57,6 +61,7 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
         await compiler.debug({ op: 'stop' });
         setSnapshot(null);
         onLocation(null);
+        onSpans([]);
         return;
       }
       if (mode === 'back') {
@@ -67,6 +72,9 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
       }
       let current = snapshot;
       if (mode === 'start' || !current) {
+        setSnapshot(null);
+        onLocation(null);
+        onSpans([]);
         const response = await compiler.debug({ op: 'start', filename: program.filename, args: arguments_.map(encodeCekArgument) });
         if (!('epoch' in response)) throw new Error('Debugger did not return a machine state');
         current = response;
@@ -94,7 +102,7 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
       if (alive.current) { setBusy(false); onBusyChange(false); }
     }
   };
-  const locations = snapshot ? focusedProjectSpans(snapshot, modules) : [];
+  const locations = snapshot ? debugSourceSpans(snapshot, modules) : [];
   const hasMachine = !!snapshot && !snapshot.done;
   const canGoBack = !!snapshot?.history && snapshot.step > snapshot.history.first;
 
@@ -141,9 +149,9 @@ export function DebuggerPanel({ compiler, program, arguments_, modules, breakpoi
       </div> : null}
       {snapshot.action ? <p className="debug-action">{snapshot.action}</p> : null}
       <div className="debug-location">
-        <strong>{snapshot.done ? snapshot.failure ? 'Failed at' : 'Finished' : snapshot.phase === 'returning' ? 'Returning to' : 'Next to execute'}</strong>
-        {locations.length ? <div className="debug-source-links"><SourceLink span={locations[0]} onLocation={onLocation} />
-          {locations.length > 1 ? <details><summary>+{locations.length - 1} {locations.length === 2 ? 'location' : 'locations'}</summary>{locations.slice(1).map((span, i) => <SourceLink key={i} span={span} onLocation={onLocation} />)}</details> : null}
+        <strong>{snapshot.done ? snapshot.failure ? 'Failed at' : 'Finished' : 'Source spans'}</strong>
+        {locations.length ? <div className="debug-source-links">
+          {locations.map((span, i) => <SourceLink key={i} span={span} onLocation={onLocation} />)}
         </div>
           : <span>{snapshot.done && !snapshot.failure ? 'Evaluation complete' : 'No project source span for this machine state'}</span>}
         {snapshot.spans.filter((span) => !modules.some((module) => module.name === span.file)).length ?
