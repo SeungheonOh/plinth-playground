@@ -113,7 +113,12 @@ is highlighted together, including inherited definitions. Spans introduced at a
 node choose the scroll target and Next source stops, but never filter the
 highlights. Overlaps are merged; source links stay visible. Unannotated control
 terms still show any continuation spans. No source is invented or carried over
-from a different machine state. The **Fibonacci · recursive
+from a different machine state. The default **Binary search · source spans**
+example uses arguments `7, 0, 20`: the midpoint moves through `10 → 4 → 7`,
+exercising both recursive branches and exposing `target`, `lower`, `upper`, and
+`middle` in the environment. Change the target to `21` to exercise the not-found
+path (`-1`). Use **Next source** to move between surviving variable-use spans
+or **Step CEK** for individual transitions. The **Fibonacci · recursive
 debugger** example starts with argument 5 and demonstrates both recursive call
 sites, named arguments, saved continuations, and backward stepping.
 In particular, the pinned compiler currently emits the builtin for `Plinth.+`

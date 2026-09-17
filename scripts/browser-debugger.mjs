@@ -232,6 +232,60 @@ main = pure ()`;
   await assert.rejects(() => debug({ op: 'step', count: 1 }), /Start a debugger session first/);
   await assert.rejects(() => debug({ op: 'start', filename: choose.filename, args: ['integer:nope'] }), /Invalid integer/);
 
+  // The source-span example must actually expose varied locations and useful
+  // intermediate values with the shipped compiler, not merely look illustrative.
+  await page.locator('.example-picker select').selectOption('binary-search');
+  await compile();
+  const searchProgram = await page.evaluate(() => window.testLastCompilation.programs[0]);
+  await page.getByRole('tab', { name: 'Run', exact: true }).click();
+  for (const [index, value] of ['7', '0', '20'].entries()) {
+    assert.equal(await page.getByLabel(`Argument ${index + 1} value`, { exact: true }).inputValue(), value);
+  }
+  await page.getByRole('tab', { name: 'Debug', exact: true }).click();
+  await page.getByRole('button', { name: 'Start debugger', exact: true }).click();
+  await page.locator('.debug-state-bar[data-step="0"]').waitFor();
+  const searchSpans = new Set();
+  const searchLines = new Set();
+  const middleValues = new Set();
+  const highlightedNames = new Set();
+  for (let step = 1; step <= 400; step++) {
+    await page.getByRole('button', { name: 'Step CEK', exact: true }).click();
+    await page.locator(`.debug-state-bar[data-step="${step}"]`).waitFor();
+    await page.waitForFunction(() => !document.querySelector('.debug-inspector .inspector-loading'));
+    const current = await page.evaluate(() => window.testLastDebugSnapshot);
+    for (const span of [...current.spans, ...current.frames.flatMap(frame => frame.spans)]) {
+      if (span.file !== 'Main.hs') continue;
+      searchSpans.add(JSON.stringify(span));
+      searchLines.add(span.startLine);
+    }
+    for (const name of await page.locator('.cek-source-highlight').allTextContents()) highlightedNames.add(name);
+    const bindings = await page.locator('.inspector-bindings > .inspector-node > button').evaluateAll(rows => rows.map(row => ({
+      name: row.querySelector('.inspector-node-name')?.textContent,
+      value: row.querySelector('.inspector-preview')?.textContent,
+    })));
+    for (const binding of bindings) {
+      if (!binding.name?.startsWith('middle') || !/^\d+$/.test(binding.value ?? '')) continue;
+      if (binding.value === '4' && !middleValues.has('4')) await page.screenshot({ path: path.join(output, 'binary-search-spans.png'), fullPage: true });
+      middleValues.add(binding.value);
+    }
+    if (current.done) {
+      assert.equal(current.result, '(con integer 7)');
+      break;
+    }
+  }
+  await page.locator('.debug-state-bar[data-phase="terminated"]').waitFor();
+  assert.ok(searchSpans.size >= 14 && searchLines.size >= 7, 'Binary search must retain varied real source spans');
+  for (const name of ['target', 'lower', 'upper', 'middle']) assert.ok(highlightedNames.has(name), `Paint ${name} use-sites`);
+  assert.deepEqual(middleValues, new Set(['10', '4', '7']), 'Both search branches must expose their computed midpoint');
+  console.log('Binary search source spans and midpoint values verified:', { spans: searchSpans.size, lines: searchLines.size, middleValues: [...middleValues] });
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  for (const [target, lower, upper, expected] of [[21, 0, 20, -1], [0, 0, 20, 0], [20, 0, 20, 20], [7, 8, 6, -1]]) {
+    const args = [target, lower, upper].map(value => ({ kind: 'integer', value: String(value) }));
+    const evaluated = await request({ type: 'evaluate', filename: searchProgram.filename, args });
+    assert.equal(evaluated.succeeded, true);
+    assert.equal(evaluated.value, `(con integer ${expected})`);
+  }
+
   // Real recursive source use-sites, not just a definition named fibonacci.
   await page.locator('.example-picker select').selectOption('fibonacci');
   await compile();

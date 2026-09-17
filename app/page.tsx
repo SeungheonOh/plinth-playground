@@ -91,6 +91,43 @@ type PlaygroundExample = {
 
 const examples = [
   {
+    id: 'binary-search',
+    label: 'Binary search · source spans',
+    args: [
+      { kind: 'integer', value: '7' },
+      { kind: 'integer', value: '0' },
+      { kind: 'integer', value: '20' },
+    ],
+    source: `{-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE TemplateHaskell #-}
+module Main where
+
+import PlutusTx.Code (CompiledCode)
+import PlutusTx.TH qualified as PlutusTx
+import PlutusTx.Prelude qualified as Plinth
+
+-- Arguments: target, lower bound, upper bound (inclusive).
+-- 7, 0, 20: middle = 10 -> 4 -> 7; take left, then right.
+-- Try target 21 with the same bounds: returns -1 (not found).
+{-# INLINEABLE binarySearch #-}
+binarySearch :: Integer -> Integer -> Integer -> Integer
+binarySearch target lower upper =
+  if lower Plinth.> upper then -1
+  else
+    let middle = Plinth.divide (lower Plinth.+ upper) 2
+    in if target Plinth.== middle
+       then middle
+       else if target Plinth.< middle
+         then binarySearch target lower (middle Plinth.- 1)
+         else binarySearch target (middle Plinth.+ 1) upper
+
+searchCode :: CompiledCode (Integer -> Integer -> Integer -> Integer)
+searchCode = $$(PlutusTx.compile [||binarySearch||])
+
+main :: IO ()
+main = pure ()`,
+  },
+  {
     id: 'fibonacci',
     label: 'Fibonacci · recursive debugger',
     args: [{ kind: 'integer', value: '5' }],
